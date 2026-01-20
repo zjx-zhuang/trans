@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hive → BigQuery SQL 转换器</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --border-color: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-yellow: #d29922;
+            --accent-purple: #a371f7;
+            --code-bg: #0d1117;
+            --shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1.5rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+
+        .header-content {
+            max-width: 1800px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+        }
+
+        .logo-text h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .logo-text span {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            font-size: 0.85rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Main Container */
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 2rem;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            min-height: calc(100vh - 100px);
+        }
+
+        @media (max-width: 1200px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Panels */
+        .panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-header {
+            padding: 1rem 1.5rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .panel-title {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .panel-title-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+        }
+
+        .panel-title-icon.hive {
+            background: linear-gradient(135deg, #ffcc00, #ff9900);
+        }
+
+        .panel-title-icon.bq {
+            background: linear-gradient(135deg, #4285f4, #34a853);
+        }
+
+        .panel-title-icon.info {
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+        }
+
+        .panel-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 1rem;
+        }
+
+        /* Code Editor */
+        .code-editor {
+            flex: 1;
+            position: relative;
+        }
+
+        .code-textarea {
+            width: 100%;
+            height: 100%;
+            min-height: 400px;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            resize: none;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .code-textarea:focus {
+            border-color: var(--accent-blue);
+        }
+
+        .code-textarea::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .code-output {
+            width: 100%;
+            height: 100%;
+            min-height: 400px;
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* Action Bar */
+        .action-bar {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+            margin-top: 1rem;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            color: white;
+            box-shadow: 0 4px 12px rgba(88, 166, 255, 0.3);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(88, 166, 255, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border-color);
+        }
+
+        .btn-icon {
+            font-size: 1.1rem;
+        }
+
+        /* Spinner */
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid transparent;
+            border-top-color: currentColor;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Info Panel */
+        .info-panel {
+            grid-column: 1 / -1;
+        }
+
+        .info-content {
+            background: var(--code-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .info-line {
+            padding: 0.25rem 0;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .info-time {
+            color: var(--text-secondary);
+            min-width: 100px;
+        }
+
+        .info-level {
+            font-weight: 600;
+            min-width: 60px;
+        }
+
+        .info-level.info { color: var(--accent-blue); }
+        .info-level.success { color: var(--accent-green); }
+        .info-level.warning { color: var(--accent-yellow); }
+        .info-level.error { color: var(--accent-red); }
+
+        .info-message {
+            color: var(--text-primary);
+        }
+
+        /* Status Cards */
+        .status-cards {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .status-card {
+            flex: 1;
+            min-width: 150px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .status-card-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+
+        .status-card-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .status-card-value.success { color: var(--accent-green); }
+        .status-card-value.error { color: var(--accent-red); }
+        .status-card-value.pending { color: var(--text-secondary); }
+
+        /* Copy Button */
+        .copy-btn {
+            padding: 0.5rem 0.75rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .copy-btn.copied {
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+            color: white;
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon">🔄</div>
+                <div class="logo-text">
+                    <h1>SQL Transformer</h1>
+                    <span>Hive → BigQuery 智能转换</span>
+                </div>
+            </div>
+            <div class="status-badge">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">服务就绪</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- Input Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <div class="panel-title-icon hive">🐝</div>
+                    <span>Hive SQL 输入</span>
+                </div>
+                <button class="copy-btn" onclick="clearInput()">清空</button>
+            </div>
+            <div class="panel-body">
+                <div class="code-editor">
+                    <textarea 
+                        class="code-textarea" 
+                        id="hiveSql" 
+                        placeholder="在此输入 Hive SQL 语句...
+
+示例:
+SELECT 
+    user_id,
+    COUNT(*) as cnt
+FROM my_table
+WHERE d = '2024-01-01'
+GROUP BY user_id"
+                    ></textarea>
+                </div>
+                <div class="action-bar">
+                    <button class="btn btn-primary" id="convertBtn" onclick="convertSql()">
+                        <span class="btn-icon">⚡</span>
+                        <span id="convertBtnText">开始转换</span>
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadSample()">
+                        <span class="btn-icon">📄</span>
+                        加载示例
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Output Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <div class="panel-title-icon bq">📊</div>
+                    <span>BigQuery SQL 输出</span>
+                </div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="copy-btn" id="saveBtn" onclick="saveResult()" style="display: none;">💾 保存</button>
+                    <button class="copy-btn" id="copyBtn" onclick="copyOutput()">复制</button>
+                </div>
+            </div>
+            <div class="panel-body">
+                <div class="status-cards">
+                    <div class="status-card">
+                        <div class="status-card-label">Hive 验证</div>
+                        <div class="status-card-value pending" id="hiveStatus">-</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-card-label">BQ 验证</div>
+                        <div class="status-card-value pending" id="bqStatus">-</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-card-label">重试次数</div>
+                        <div class="status-card-value pending" id="retryCount">-</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-card-label">验证模式</div>
+                        <div class="status-card-value pending" id="validationMode">-</div>
+                    </div>
+                </div>
+                <div class="code-editor">
+                    <div class="code-output" id="bqOutput">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📝</div>
+                            <div>转换结果将在这里显示</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info Panel -->
+        <div class="panel info-panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <div class="panel-title-icon info">📋</div>
+                    <span>实时日志</span>
+                </div>
+                <button class="copy-btn" onclick="clearLogs()">清除日志</button>
+            </div>
+            <div class="panel-body">
+                <div class="info-content" id="infoPanel">
+                    <div class="info-line">
+                        <span class="info-time">[系统]</span>
+                        <span class="info-level info">INFO</span>
+                        <span class="info-message">SQL 转换器已就绪，等待输入...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        let isConverting = false;
+        let eventSource = null;
+        let lastConversionResult = null;  // 存储最后一次转换结果
+
+        // Log function - add log from frontend
+        function addLog(level, message, fromServer = false) {
+            const infoPanel = document.getElementById('infoPanel');
+            const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            const line = document.createElement('div');
+            line.className = 'info-line';
+            
+            const source = fromServer ? '服务' : '前端';
+            line.innerHTML = `
+                <span class="info-time">[${time}]</span>
+                <span class="info-level ${level}">${level.toUpperCase()}</span>
+                <span class="info-message">${escapeHtml(message)}</span>
+            `;
+            infoPanel.appendChild(line);
+            infoPanel.scrollTop = infoPanel.scrollHeight;
+        }
+
+        // Add server log - from SSE
+        function addServerLog(logEntry) {
+            const infoPanel = document.getElementById('infoPanel');
+            const line = document.createElement('div');
+            line.className = 'info-line';
+            
+            const level = logEntry.level || 'info';
+            const levelClass = level === 'warning' ? 'warning' : 
+                              level === 'error' ? 'error' : 
+                              level === 'success' ? 'success' : 'info';
+            
+            line.innerHTML = `
+                <span class="info-time">[${logEntry.time}]</span>
+                <span class="info-level ${levelClass}">${level.toUpperCase()}</span>
+                <span class="info-message">${escapeHtml(logEntry.message)}</span>
+            `;
+            infoPanel.appendChild(line);
+            infoPanel.scrollTop = infoPanel.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Connect to SSE log stream
+        function connectLogStream() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            eventSource = new EventSource(`${API_URL}/logs/stream`);
+            
+            eventSource.onmessage = (event) => {
+                try {
+                    const logEntry = JSON.parse(event.data);
+                    addServerLog(logEntry);
+                } catch (e) {
+                    console.error('Failed to parse log entry:', e);
+                }
+            };
+            
+            eventSource.onerror = (error) => {
+                console.error('SSE connection error:', error);
+                // Reconnect after 3 seconds
+                setTimeout(() => {
+                    if (eventSource.readyState === EventSource.CLOSED) {
+                        connectLogStream();
+                    }
+                }, 3000);
+            };
+            
+            eventSource.onopen = () => {
+                console.log('SSE connection established');
+            };
+        }
+
+        // Clear input
+        function clearInput() {
+            document.getElementById('hiveSql').value = '';
+            addLog('info', '已清空输入');
+        }
+
+        // Clear logs
+        function clearLogs() {
+            document.getElementById('infoPanel').innerHTML = '';
+            addLog('info', '日志已清除');
+        }
+
+        // Load sample SQL
+        function loadSample() {
+            const sampleSql = `WITH daily_orders AS (
+    SELECT 
+        to_date(order_time) AS order_date,
+        customer_id,
+        SUM(amount) AS daily_amount,
+        COUNT(*) AS order_count
+    FROM orders
+    WHERE order_time >= date_sub(current_date(), 30)
+    GROUP BY to_date(order_time), customer_id
+)
+SELECT 
+    customer_id,
+    AVG(daily_amount) AS avg_daily_spend,
+    SUM(order_count) AS total_orders,
+    collect_list(order_date) AS order_dates
+FROM daily_orders
+GROUP BY customer_id
+ORDER BY avg_daily_spend DESC
+LIMIT 100`;
+            document.getElementById('hiveSql').value = sampleSql;
+            addLog('info', '已加载示例 SQL');
+        }
+
+        // Update status
+        function updateStatus(status, message) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            
+            dot.style.background = status === 'success' ? 'var(--accent-green)' :
+                                   status === 'error' ? 'var(--accent-red)' :
+                                   status === 'loading' ? 'var(--accent-yellow)' :
+                                   'var(--accent-green)';
+            text.textContent = message;
+        }
+
+        // Update result cards
+        function updateResultCards(result) {
+            const hiveStatus = document.getElementById('hiveStatus');
+            const bqStatus = document.getElementById('bqStatus');
+            const retryCount = document.getElementById('retryCount');
+            const validationMode = document.getElementById('validationMode');
+
+            hiveStatus.textContent = result.hive_valid ? '✓ 通过' : '✗ 失败';
+            hiveStatus.className = 'status-card-value ' + (result.hive_valid ? 'success' : 'error');
+
+            bqStatus.textContent = result.validation_success ? '✓ 通过' : '✗ 失败';
+            bqStatus.className = 'status-card-value ' + (result.validation_success ? 'success' : 'error');
+
+            retryCount.textContent = result.retry_count;
+            retryCount.className = 'status-card-value';
+
+            validationMode.textContent = result.validation_mode || '-';
+            validationMode.className = 'status-card-value';
+        }
+
+        // Clear previous conversion cache
+        function clearConversionCache() {
+            // 清除上次转换结果
+            lastConversionResult = null;
+            
+            // 隐藏保存按钮
+            document.getElementById('saveBtn').style.display = 'none';
+            
+            // 重置状态卡片
+            document.getElementById('hiveStatus').textContent = '-';
+            document.getElementById('hiveStatus').className = 'status-card-value pending';
+            document.getElementById('bqStatus').textContent = '-';
+            document.getElementById('bqStatus').className = 'status-card-value pending';
+            document.getElementById('retryCount').textContent = '-';
+            document.getElementById('retryCount').className = 'status-card-value pending';
+            document.getElementById('validationMode').textContent = '-';
+            document.getElementById('validationMode').className = 'status-card-value pending';
+            
+            // 重置输出区域
+            document.getElementById('bqOutput').innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">⏳</div>
+                    <div>正在转换，请稍候...</div>
+                </div>
+            `;
+        }
+
+        // Convert SQL
+        async function convertSql() {
+            if (isConverting) return;
+
+            const hiveSql = document.getElementById('hiveSql').value.trim();
+            if (!hiveSql) {
+                addLog('warning', '请输入 Hive SQL');
+                return;
+            }
+
+            isConverting = true;
+            const btn = document.getElementById('convertBtn');
+            const btnText = document.getElementById('convertBtnText');
+            
+            // 清除上次转换的缓存
+            clearConversionCache();
+            addLog('info', '开始新的转换任务...');
+            
+            btn.disabled = true;
+            btnText.innerHTML = '<div class="spinner"></div> 转换中...';
+            updateStatus('loading', '正在转换...');
+
+            try {
+                const startTime = Date.now();
+                const response = await fetch(`${API_URL}/convert`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ hive_sql: hiveSql }),
+                });
+
+                const result = await response.json();
+                const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+                addLog('info', `转换完成，耗时 ${duration}s`);
+                
+                // 存储转换结果
+                lastConversionResult = {
+                    ...result,
+                    hive_sql: hiveSql,
+                    conversion_time: new Date().toISOString(),
+                    duration: duration
+                };
+                
+                // 显示保存按钮
+                document.getElementById('saveBtn').style.display = 'inline-flex';
+                
+                // Update status cards
+                updateResultCards(result);
+
+                if (result.bigquery_sql) {
+                    document.getElementById('bqOutput').textContent = result.bigquery_sql;
+                }
+
+                if (result.validation_success) {
+                    updateStatus('success', '转换成功');
+                } else {
+                    updateStatus('error', '验证失败');
+                }
+
+                if (result.success) {
+                    addLog('success', '🎉 转换完全成功!');
+                }
+
+            } catch (error) {
+                addLog('error', `请求失败: ${error.message}`);
+                updateStatus('error', '请求失败');
+                document.getElementById('bqOutput').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">❌</div>
+                        <div>请求失败: ${escapeHtml(error.message)}</div>
+                        <div style="margin-top: 0.5rem; font-size: 0.85rem;">请确保后端服务正在运行</div>
+                    </div>
+                `;
+            } finally {
+                isConverting = false;
+                btn.disabled = false;
+                btnText.textContent = '开始转换';
+            }
+        }
+
+        // Copy output
+        function copyOutput() {
+            const output = document.getElementById('bqOutput').textContent;
+            if (!output || output.includes('转换结果将在这里显示')) {
+                addLog('warning', '没有可复制的内容');
+                return;
+            }
+
+            navigator.clipboard.writeText(output).then(() => {
+                const btn = document.getElementById('copyBtn');
+                btn.textContent = '已复制!';
+                btn.classList.add('copied');
+                addLog('success', '已复制到剪贴板');
+                
+                setTimeout(() => {
+                    btn.textContent = '复制';
+                    btn.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                addLog('error', '复制失败: ' + err.message);
+            });
+        }
+
+        // Save result to file
+        function saveResult() {
+            if (!lastConversionResult) {
+                addLog('warning', '没有可保存的转换结果');
+                return;
+            }
+
+            const r = lastConversionResult;
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const defaultName = `sql_conversion_${timestamp}`;
+            
+            // 让用户输入文件名
+            const userInput = prompt('请输入文件名（不需要扩展名）:', defaultName);
+            if (userInput === null) {
+                // 用户取消
+                addLog('info', '已取消保存');
+                return;
+            }
+            
+            const filename = (userInput.trim() || defaultName) + '.txt';
+
+            // 生成文件内容
+            let content = `================================================================================
+SQL 转换报告
+================================================================================
+生成时间: ${r.conversion_time}
+转换耗时: ${r.duration}s
+
+================================================================================
+1. 原始 Hive SQL
+================================================================================
+${r.hive_sql}
+
+================================================================================
+2. 转换后的 BigQuery SQL
+================================================================================
+${r.bigquery_sql || '(转换失败，无输出)'}
+
+================================================================================
+3. 校验结果
+================================================================================
+Hive SQL 验证: ${r.hive_valid ? '✓ 通过' : '✗ 失败'}
+${r.hive_error ? `Hive 错误: ${r.hive_error}` : ''}
+
+BigQuery 验证: ${r.validation_success ? '✓ 通过' : '✗ 失败'}
+验证模式: ${r.validation_mode || 'N/A'}
+${r.validation_error ? `验证错误: ${r.validation_error}` : ''}
+
+================================================================================
+4. 转换统计
+================================================================================
+重试次数: ${r.retry_count}
+整体结果: ${r.success ? '✓ 成功' : '✗ 失败'}
+${r.warning ? `警告: ${r.warning}` : ''}
+`;
+
+            // 添加转换历史（如果有）
+            if (r.conversion_history && r.conversion_history.length > 0) {
+                content += `
+================================================================================
+5. 转换历史
+================================================================================
+`;
+                r.conversion_history.forEach((h, i) => {
+                    content += `
+--- 尝试 ${h.attempt} ---
+${h.error ? `错误: ${h.error}` : '无错误'}
+`;
+                });
+            }
+
+            content += `
+================================================================================
+END OF REPORT
+================================================================================
+`;
+
+            // 创建并下载文件
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            // 更新按钮状态
+            const btn = document.getElementById('saveBtn');
+            btn.textContent = '✓ 已保存';
+            btn.classList.add('copied');
+            addLog('success', `已保存到 ${filename}`);
+            
+            setTimeout(() => {
+                btn.textContent = '💾 保存';
+                btn.classList.remove('copied');
+            }, 2000);
+        }
+
+        // Check service status on load
+        async function checkService() {
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                if (response.ok) {
+                    updateStatus('success', '服务就绪');
+                    addLog('success', '已连接到转换服务');
+                    
+                    // Get service info
+                    const infoResponse = await fetch(`${API_URL}/`);
+                    const info = await infoResponse.json();
+                    addLog('info', `LLM 提供者: ${info.llm_provider}`);
+                    addLog('info', `验证模式: ${info.validation_mode}`);
+                    
+                    // Connect to log stream
+                    connectLogStream();
+                    addLog('info', '已连接实时日志流');
+                }
+            } catch (error) {
+                updateStatus('error', '服务未连接');
+                addLog('error', '无法连接到转换服务，请确保服务已启动');
+            }
+        }
+
+        // Keyboard shortcut
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                convertSql();
+            }
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+
+        // Initialize
+        checkService();
+    </script>
+</body>
+</html>

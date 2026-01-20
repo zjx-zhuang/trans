@@ -1,0 +1,272 @@
+================================================================================
+SQL 转换报告
+================================================================================
+生成时间: 2026-01-20T09:00:22.851Z
+转换耗时: 98.29s
+
+================================================================================
+1. 原始 Hive SQL
+================================================================================
+use dwhtl;
+
+
+insert overwrite table dwhtl.adm_traf_browse_nstandard_tcom_entr_di partition(d)
+-- 不分locale
+SELECT 'all locales' as locale
+       , case when page=10650163454 then 'Homeapge'
+              when page=10650163456 then 'List page'
+              when page=10650163458 then 'Property content page' 
+              else null 
+          end as pg_name
+       , count(distinct vid) as UV
+       , count(distinct vid, sid, pvid) as PV
+       -- 分区d                         
+       , d
+  from dw_htlbizdb.edw_traf_pt_fact_ibu_ubt_pageview
+--  where d >= '2025-03-27' -- 初始化
+ where d >= '${zdt.addDay(-7).format("yyyy-MM-dd")}'
+   and d < '${zdt.addDay(0).format("yyyy-MM-dd")}'
+   and page in (10650163454,10650163456,10650163458)
+ group by d
+       , case when page=10650163454 then 'Homeapge'
+              when page=10650163456 then 'List page'
+              when page=10650163458 then 'Property content page' 
+              else null 
+          end
+          
+ union all 
+
+select 'all locales' as locale
+       , 'Filling-in page' as pg_name
+       , count(distinct vid) as UV
+       , count(distinct vid,sid,pvid) as PV
+       -- 分区d                         
+       , d                         
+  from dw_htlbizdb.v_edw_traf_ubt_tcom_custom_di
+--  where d >= '2025-03-27' -- 初始化
+ where d >= '${zdt.addDay(-7).format("yyyy-MM-dd")}'
+   and d < '${zdt.addDay(0).format("yyyy-MM-dd")}'
+   and key in ('htl_aptsFillOrd_payment_submitBt_exposure')
+   and is_spider = 'F' --剔除爬虫
+ group by d
+
+ union all 
+
+select 'all locales' as locale
+       , '[Book] button click after info fill-in' as pg_name
+       , count(distinct vid) as UV
+       , count(distinct vid,sid,pvid) as PV
+       -- 分区d                         
+       , d                         
+  from dw_htlbizdb.v_edw_traf_ubt_tcom_custom_di
+--  where d >= '2025-03-27' -- 初始化
+ where d >= '${zdt.addDay(-7).format("yyyy-MM-dd")}'
+   and d < '${zdt.addDay(0).format("yyyy-MM-dd")}' 
+   and key in ('htl_aptsFillOrd_payment_submitBt_click')
+   and is_spider = 'F' --剔除爬虫
+ group by d
+ 
+ union all
+-- 分locale
+SELECT lower(trim(replace(locale,'_','-') )) as locale
+       , case when page=10650163454 then 'Homeapge'
+              when page=10650163456 then 'List page'
+              when page=10650163458 then 'Property content page' 
+              else null 
+          end as pg_name
+       , count(distinct vid) as UV
+       , count(distinct vid, sid, pvid) as PV
+       -- 分区d                         
+       , d                             
+  from dw_htlbizdb.edw_traf_pt_fact_ibu_ubt_pageview
+--  where d >= '2025-03-27' -- 初始化
+ where d >= '${zdt.addDay(-7).format("yyyy-MM-dd")}'
+   and d < '${zdt.addDay(0).format("yyyy-MM-dd")}' 
+   and page in (10650163454,10650163456,10650163458)
+ group by lower(trim(replace(locale,'_','-') ))
+       , case when page=10650163454 then 'Homeapge'
+              when page=10650163456 then 'List page'
+              when page=10650163458 then 'Property content page' 
+              else null 
+          end
+       , d
+       
+ union all 
+ 
+select lower(trim(replace(data_info['locale'],'_','-'))) as locale
+       , 'Filling-in page' as pg_name
+       , count(distinct vid) as UV
+       , count(distinct vid,sid,pvid) as PV
+       -- 分区d                         
+       , d                              
+  from dw_htlbizdb.v_edw_traf_ubt_tcom_custom_di
+--  where d >= '2025-03-27' -- 初始化
+ where d >= '${zdt.addDay(-7).format("yyyy-MM-dd")}'
+   and d < '${zdt.addDay(0).format("yyyy-MM-dd")}' 
+   and key in ('htl_aptsFillOrd_payment_submitBt_exposure')
+   and is_spider = 'F' --剔除爬虫
+ group by lower(trim(replace(data_info['locale'],'_','-')))
+       , d
+       
+ union all 
+
+select lower(trim(replace(data_info['locale'],'_','-'))) as locale
+       , '[Book] button click after info fill-in' as page
+       , count(distinct vid) as UV
+       , count(distinct vid,sid,pvid) as PV
+       -- 分区d                         
+       , d                              
+  from dw_htlbizdb.v_edw_traf_ubt_tcom_custom_di
+--  where d >= '2025-03-27' -- 初始化
+ where d >= '${zdt.addDay(-7).format("yyyy-MM-dd")}'
+   and d < '${zdt.addDay(0).format("yyyy-MM-dd")}' 
+   and key in ('htl_aptsFillOrd_payment_submitBt_click')
+   and is_spider = 'F' --剔除爬虫
+ group by lower(trim(replace(data_info['locale'],'_','-')))
+       , d
+;
+
+================================================================================
+2. 转换后的 BigQuery SQL
+================================================================================
+CREATE OR REPLACE TABLE `trip-htl-bi-dbprj.htl_bi_temp.dwhtl_adm_traf_browse_nstandard_tcom_entr_di`
+PARTITION BY d AS
+(
+SELECT 'all locales' as locale
+       , CASE WHEN SAFE_CAST(page AS INT64)=10650163454 THEN 'Homeapge'
+              WHEN SAFE_CAST(page AS INT64)=10650163456 THEN 'List page'
+              WHEN SAFE_CAST(page AS INT64)=10650163458 THEN 'Property content page'
+              ELSE NULL
+          END AS pg_name
+       , COUNT(DISTINCT vid) AS UV
+       , COUNT(DISTINCT CONCAT(CAST(vid AS STRING), '-', CAST(sid AS STRING), '-', CAST(pvid AS STRING))) AS PV
+       , d
+  FROM `trip-htl-bi-dbprj.htl_bi_webeye.edw_traf_pt_fact_ibu_ubt_pageview`
+ WHERE d >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+   AND d < CURRENT_DATE()
+   AND SAFE_CAST(page AS INT64) IN (10650163454,10650163456,10650163458)
+ GROUP BY d
+       , CASE WHEN SAFE_CAST(page AS INT64)=10650163454 THEN 'Homeapge'
+              WHEN SAFE_CAST(page AS INT64)=10650163456 THEN 'List page'
+              WHEN SAFE_CAST(page AS INT64)=10650163458 THEN 'Property content page'
+              ELSE NULL
+          END
+
+ UNION ALL
+
+SELECT 'all locales' AS locale
+       , 'Filling-in page' AS pg_name
+       , COUNT(DISTINCT vid) AS UV
+       , COUNT(DISTINCT CONCAT(CAST(vid AS STRING), '-', CAST(sid AS STRING), '-', CAST(pvid AS STRING))) AS PV
+       , d
+  FROM `trip-htl-bi-dbprj.htl_bi_webeye.v_edw_traf_ubt_tcom_custom_di`
+ WHERE d >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+   AND d < CURRENT_DATE()
+   AND key IN ('htl_aptsFillOrd_payment_submitBt_exposure')
+   AND JSON_VALUE(data_info, '$.is_spider') = 'F'
+ GROUP BY d
+
+ UNION ALL
+
+SELECT 'all locales' AS locale
+       , '[Book] button click after info fill-in' AS pg_name
+       , COUNT(DISTINCT vid) AS UV
+       , COUNT(DISTINCT CONCAT(CAST(vid AS STRING), '-', CAST(sid AS STRING), '-', CAST(pvid AS STRING))) AS PV
+       , d
+  FROM `trip-htl-bi-dbprj.htl_bi_webeye.v_edw_traf_ubt_tcom_custom_di`
+ WHERE d >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+   AND d < CURRENT_DATE()
+   AND key IN ('htl_aptsFillOrd_payment_submitBt_click')
+   AND JSON_VALUE(data_info, '$.is_spider') = 'F'
+ GROUP BY d
+
+ UNION ALL
+
+SELECT LOWER(TRIM(REPLACE(locale,'_','-') )) AS locale
+       , CASE WHEN SAFE_CAST(page AS INT64)=10650163454 THEN 'Homeapge'
+              WHEN SAFE_CAST(page AS INT64)=10650163456 THEN 'List page'
+              WHEN SAFE_CAST(page AS INT64)=10650163458 THEN 'Property content page'
+              ELSE NULL
+          END AS pg_name
+       , COUNT(DISTINCT vid) AS UV
+       , COUNT(DISTINCT CONCAT(CAST(vid AS STRING), '-', CAST(sid AS STRING), '-', CAST(pvid AS STRING))) AS PV
+       , d
+  FROM `trip-htl-bi-dbprj.htl_bi_webeye.edw_traf_pt_fact_ibu_ubt_pageview`
+ WHERE d >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+   AND d < CURRENT_DATE()
+   AND SAFE_CAST(page AS INT64) IN (10650163454,10650163456,10650163458)
+ GROUP BY LOWER(TRIM(REPLACE(locale,'_','-') ))
+       , CASE WHEN SAFE_CAST(page AS INT64)=10650163454 THEN 'Homeapge'
+              WHEN SAFE_CAST(page AS INT64)=10650163456 THEN 'List page'
+              WHEN SAFE_CAST(page AS INT64)=10650163458 THEN 'Property content page'
+              ELSE NULL
+          END
+       , d
+
+ UNION ALL
+
+SELECT LOWER(TRIM(REPLACE(JSON_VALUE(data_info, '$.locale'),'_','-'))) AS locale
+       , 'Filling-in page' AS pg_name
+       , COUNT(DISTINCT vid) AS UV
+       , COUNT(DISTINCT CONCAT(CAST(vid AS STRING), '-', CAST(sid AS STRING), '-', CAST(pvid AS STRING))) AS PV
+       , d
+  FROM `trip-htl-bi-dbprj.htl_bi_webeye.v_edw_traf_ubt_tcom_custom_di`
+ WHERE d >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+   AND d < CURRENT_DATE()
+   AND key IN ('htl_aptsFillOrd_payment_submitBt_exposure')
+   AND JSON_VALUE(data_info, '$.is_spider') = 'F'
+ GROUP BY LOWER(TRIM(REPLACE(JSON_VALUE(data_info, '$.locale'),'_','-')))
+       , d
+
+ UNION ALL
+
+SELECT LOWER(TRIM(REPLACE(JSON_VALUE(data_info, '$.locale'),'_','-'))) AS locale
+       , '[Book] button click after info fill-in' AS pg_name
+       , COUNT(DISTINCT vid) AS UV
+       , COUNT(DISTINCT CONCAT(CAST(vid AS STRING), '-', CAST(sid AS STRING), '-', CAST(pvid AS STRING))) AS PV
+       , d
+  FROM `trip-htl-bi-dbprj.htl_bi_webeye.v_edw_traf_ubt_tcom_custom_di`
+ WHERE d >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+   AND d < CURRENT_DATE()
+   AND key IN ('htl_aptsFillOrd_payment_submitBt_click')
+   AND JSON_VALUE(data_info, '$.is_spider') = 'F'
+ GROUP BY LOWER(TRIM(REPLACE(JSON_VALUE(data_info, '$.locale'),'_','-')))
+       , d
+);
+
+================================================================================
+3. 校验结果
+================================================================================
+Hive SQL 验证: ✓ 通过
+
+
+BigQuery 验证: ✓ 通过
+验证模式: dry_run
+
+
+================================================================================
+4. 转换统计
+================================================================================
+重试次数: 3
+整体结果: ✓ 成功
+
+
+================================================================================
+5. 转换历史
+================================================================================
+
+--- 尝试 1 ---
+错误: No matching signature for operator IN for argument types STRING and {INT64} at [16:13] (at q)
+
+--- 尝试 2 ---
+错误: Unrecognized name: is_spider at [35:8] (at q)
+
+--- 尝试 3 ---
+错误: Aggregate functions with DISTINCT cannot be used with arguments of type STRUCT (at q)
+
+--- 尝试 4 ---
+无错误
+
+================================================================================
+END OF REPORT
+================================================================================

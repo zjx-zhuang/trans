@@ -1,0 +1,147 @@
+================================================================================
+SQL 转换报告
+================================================================================
+生成时间: 2026-01-20T07:56:14.923Z
+转换耗时: 60.44s
+
+================================================================================
+1. 原始 Hive SQL
+================================================================================
+use dw_htlbizdb;
+set hivevar:date_app=${zdt.addDay(-1).format("yyyyMMdd")}_test;
+
+insert overwrite table dw_htlbizdb.edw_traf_search_tcom_ubt_server_htllist_di_sgp partition (d='${zdt.addDay(-1).format("yyyy-MM-dd")}')
+select
+     t.event_id
+	,t.key
+	,t.starttime --埋点触发时间
+	,t.cid --用户设备标识
+	,t.uid--用户id
+	,t.vid --用户唯一标识，主要是非app统计用户数用
+	,t.sid --会话ID
+	,t.pvid --页面自增长ID
+	,t.page  --页面ID/CODE
+    ,t.value_data_map
+    ,t.htl_data_map
+    ,t.masterhotelid
+    ,t.masterhotelid_token
+    ,t.masterhotelid_tracelogid
+    ,e.exchange
+    ,m.star       as m_star  
+    ,m.cityid     as m_city   
+    ,m.countryid  as m_country 
+    ,m.goldstar   as m_goldstar
+    ,c_starttime as c_starttime
+from (
+    select
+        *
+        ,ROW_NUMBER() OVER (PARTITION BY cid,vid,masterhotelid,masterhotelid_token,masterhotelid_tracelogid ORDER BY starttime desc ) AS q_rnk11
+        ,value_data_map['currency'] as currency 
+    from dw_htlbizdb.edw_traf_search_tcom_ubt_server_htllist_hi_sgp
+    where d='${zdt.addDay(-1).format("yyyy-MM-dd")}'
+) t
+LEFT JOIN (
+	SELECT  
+	        distinct isocode
+	       ,exchange
+	FROM dw_htlbizdb.v_dim_traf_multi_Currency_DBRepl_df_sgp
+	WHERE d = '${zdt.addDay(0).format("yyyy-MM-dd")}' 
+) e ON lower(t.currency) = lower(e.isocode)
+LEFT JOIN dw_htlbizdb.v_dim_traf_multi_masterhotel_df_sgp  m ON t.masterhotelid = m.masterhotelid
+where t.q_rnk11=1
+;
+
+================================================================================
+2. 转换后的 BigQuery SQL
+================================================================================
+DECLARE date_app STRING DEFAULT CONCAT(FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)), '_test');
+DECLARE partition_d DATE DEFAULT DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY);
+
+CREATE OR REPLACE TABLE `trip-htl-bi-dbprj.htl_bi_webeye.edw_traf_search_tcom_ubt_server_htllist_di_sgp`
+PARTITION BY d
+CLUSTER BY cid, vid, masterhotelid
+AS
+SELECT
+     t.event_id
+	,t.key
+	,t.starttime --埋点触发时间
+	,t.cid --用户设备标识
+	,t.uid--用户id
+	,t.vid --用户唯一标识，主要是非app统计用户数用
+	,t.sid --会话ID
+	,t.pvid --页面自增长ID
+	,t.page  --页面ID/CODE
+    ,t.value_data_map
+    ,t.htl_data_map
+    ,t.masterhotelid
+    ,t.masterhotelid_token
+    ,t.masterhotelid_tracelogid
+    ,e.exchange
+    ,m.star       AS m_star  
+    ,m.cityid     AS m_city   
+    ,m.countryid  AS m_country 
+    ,m.goldstar   AS m_goldstar
+    ,t.c_starttime AS c_starttime
+    ,partition_d AS d
+FROM (
+    SELECT
+        *
+        ,ROW_NUMBER() OVER (PARTITION BY cid,vid,masterhotelid,masterhotelid_token,masterhotelid_tracelogid ORDER BY starttime DESC ) AS q_rnk11
+        ,(SELECT value FROM UNNEST(value_data_map) WHERE key = 'currency') AS currency 
+    FROM `trip-htl-bi-dbprj.hutl_bi_sql_tuning.dw_htlbizdb_edw_traf_search_tcom_ubt_server_htllist_hi_sgp`
+    WHERE d = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+) t
+LEFT JOIN (
+	SELECT  
+	        DISTINCT isocode
+	       ,exchange
+	FROM `trip-htl-bi-dbprj.htl_bi_webeye.v_dim_traf_multi_currency_dbrepl_df_sgp`
+	WHERE d = CURRENT_DATE()
+) e ON LOWER(t.currency) = LOWER(e.isocode)
+LEFT JOIN `trip-htl-bi-dbprj.htl_bi_webeye.v_dim_traf_multi_masterhotel_df_sgp` m ON CAST(t.masterhotelid AS STRING) = CAST(m.masterhotelid AS STRING)
+WHERE t.q_rnk11 = 1
+
+================================================================================
+3. 校验结果
+================================================================================
+Hive SQL 验证: ✓ 通过
+
+
+BigQuery 验证: ✓ 通过
+验证模式: dry_run
+
+
+================================================================================
+4. 转换统计
+================================================================================
+重试次数: 3
+整体结果: ✓ 成功
+
+
+================================================================================
+5. 转换历史
+================================================================================
+
+--- 尝试 1 ---
+错误: Query error: No matching signature for function JSON_VALUE
+  Argument types: ARRAY<STRUCT<key STRING, value STRING>>, STRING
+  Signature: JSON_VALUE(STRING, [STRING])
+    Argument 1: Unable to coerce type ARRAY<STRUCT<key STRING, value STRING>> to expected type STRING
+  Signature: JSON_VALUE(JSON, [STRING])
+    Argument 1: Unable to coerce type ARRAY<STRUCT<key STRING, value STRING>> to expected type JSON at [30:10] at [4:1] (at q)
+
+--- 尝试 2 ---
+错误: Query error: No matching signature for operator = for argument types: STRING, INT64
+  Signature: T1 = T1
+    Unable to find common supertype for templated argument <T1>
+      Input types for <T1>: {INT64, STRING} at [41:86] at [4:1] (at q)
+
+--- 尝试 3 ---
+错误: Invalid value: Cannot replace a table with a different partitioning spec. Instead, DROP the table, and then recreate it. New partitioning spec is interval(type:day,field:d) and existing spec is interval(type:day,field:d) clustering(cid,vid,masterhotelid) at [4:1] (at q)
+
+--- 尝试 4 ---
+无错误
+
+================================================================================
+END OF REPORT
+================================================================================

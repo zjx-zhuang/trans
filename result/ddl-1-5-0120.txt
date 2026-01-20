@@ -1,0 +1,164 @@
+================================================================================
+SQL 转换报告
+================================================================================
+生成时间: 2026-01-20T07:51:32.117Z
+转换耗时: 28.55s
+
+================================================================================
+1. 原始 Hive SQL
+================================================================================
+set hivevar:date_app=${zdt.addDay(-1).format("yyyyMMdd")}_test;
+
+
+insert overwrite table di_dsjobdb.adm_ibu_overall_trend_analysis partition(d=d)
+select channeltype,refername,allianceid,alliancesiteid,methodname as scene,'all' as locale,locale_group,
+       pv,uv,
+       round(click_query_cnt/ pv, 6)      as click_query_rate,
+       round(click_query_cnt_top1/ nullif(click_query_cnt,0), 6)  as top1_click_rate,
+       round(click_query_cnt_top3/ nullif(click_query_cnt,0), 6)  as top3_click_rate,
+       round(click_query_cnt_top5/ nullif(click_query_cnt,0), 6)  as top5_click_rate,
+       round(click_query_cnt_top10/ nullif(click_query_cnt,0), 6) as top10_click_rate,
+       round(order_query_cnt_top1/ nullif(order_query_cnt,0), 6)  as top1_order_rate,
+       round(order_query_cnt_top3/ nullif(order_query_cnt,0), 6)  as top3_order_rate,
+       round(order_query_cnt_top5/ nullif(order_query_cnt,0), 6)  as top5_order_rate,
+       round(order_query_cnt_top10/ nullif(order_query_cnt,0), 6) as top10_order_rate,
+       round(order_query_cnt/ pv, 6)       as order_query_rate,
+       'all' as countryname,
+       expo_hotel_count,
+       round(click_query_cnt_top20/ nullif(click_query_cnt,0), 6) as top20_click_rate,
+       round(order_query_cnt_top20/ nullif(order_query_cnt,0), 6) as top20_order_rate,
+       -- twy增加查询口径
+       round(click_query_cnt_top1/ pv, 6)  as top1_click_rate_query,
+       round(click_query_cnt_top3/ pv, 6)  as top3_click_rate_query,
+       round(click_query_cnt_top5/ pv, 6)  as top5_click_rate_query,
+       round(click_query_cnt_top10/ pv, 6) as top10_click_rate_query,
+       round(order_query_cnt_top1/ pv, 6)  as top1_order_rate_query,
+       round(order_query_cnt_top3/ pv, 6)  as top3_order_rate_query,
+       round(order_query_cnt_top5/ pv, 6)  as top5_order_rate_query,
+       round(order_query_cnt_top10/ pv, 6) as top10_order_rate_query,
+       d
+from (
+  select 
+    d, channeltype, refername, allianceid, alliancesiteid,
+    case when methodname = 'all' then 'all_list' else methodname end as methodname, -- 整个列表页
+    locale_group,
+    pv, uv, click_query_cnt, click_query_cnt_top1, click_query_cnt_top3, 
+    click_query_cnt_top5, click_query_cnt_top10, click_query_cnt_top20,
+    order_query_cnt, order_query_cnt_top1, order_query_cnt_top3, 
+    order_query_cnt_top5, order_query_cnt_top10, order_query_cnt_top20,
+    expo_hotel_count
+  from tmp_htl_dsjobdb.tmp_ibu_overall_agg_detail_${date_app}
+  union all
+  select 
+    d, channeltype, refername, allianceid, alliancesiteid,
+    case when methodname = 'all' then 'all_model_list' else methodname end as methodname, -- 只考虑模型作用的主场景列表页
+    locale_group,
+    pv, uv, click_query_cnt, click_query_cnt_top1, click_query_cnt_top3, 
+    click_query_cnt_top5, click_query_cnt_top10, click_query_cnt_top20,
+    order_query_cnt, order_query_cnt_top1, order_query_cnt_top3, 
+    order_query_cnt_top5, order_query_cnt_top10, order_query_cnt_top20,
+    expo_hotel_count
+  from tmp_htl_dsjobdb.tmp_ibu_overall_agg_group_${date_app}
+) u
+;
+
+================================================================================
+2. 转换后的 BigQuery SQL
+================================================================================
+DECLARE date_app STRING DEFAULT CONCAT(FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)), '_test');
+DECLARE target_table_name STRING DEFAULT '`trip-htl-bi-dbprj.htl_bi_webeye.adm_ibu_overall_trend_analysis`';
+DECLARE source_table_detail STRING DEFAULT CONCAT('`trip-htl-bi-dbprj.htl_bi_temp.tmp_ibu_overall_agg_detail_', date_app, '`');
+DECLARE source_table_group STRING DEFAULT CONCAT('`trip-htl-bi-dbprj.htl_bi_temp.tmp_ibu_overall_agg_group_', date_app, '`');
+DECLARE query STRING;
+
+SET query = FORMAT("""
+  CREATE OR REPLACE TABLE %s
+  PARTITION BY d AS
+  SELECT
+    channeltype,
+    refername,
+    allianceid,
+    alliancesiteid,
+    methodname AS scene,
+    'all' AS locale,
+    locale_group,
+    pv,
+    uv,
+    ROUND(click_query_cnt / pv, 6) AS click_query_rate,
+    ROUND(click_query_cnt_top1 / NULLIF(click_query_cnt, 0), 6) AS top1_click_rate,
+    ROUND(click_query_cnt_top3 / NULLIF(click_query_cnt, 0), 6) AS top3_click_rate,
+    ROUND(click_query_cnt_top5 / NULLIF(click_query_cnt, 0), 6) AS top5_click_rate,
+    ROUND(click_query_cnt_top10 / NULLIF(click_query_cnt, 0), 6) AS top10_click_rate,
+    ROUND(order_query_cnt_top1 / NULLIF(order_query_cnt, 0), 6) AS top1_order_rate,
+    ROUND(order_query_cnt_top3 / NULLIF(order_query_cnt, 0), 6) AS top3_order_rate,
+    ROUND(order_query_cnt_top5 / NULLIF(order_query_cnt, 0), 6) AS top5_order_rate,
+    ROUND(order_query_cnt_top10 / NULLIF(order_query_cnt, 0), 6) AS top10_order_rate,
+    ROUND(order_query_cnt / pv, 6) AS order_query_rate,
+    'all' AS countryname,
+    expo_hotel_count,
+    ROUND(click_query_cnt_top20 / NULLIF(click_query_cnt, 0), 6) AS top20_click_rate,
+    ROUND(order_query_cnt_top20 / NULLIF(order_query_cnt, 0), 6) AS top20_order_rate,
+    -- twy增加查询口径
+    ROUND(click_query_cnt_top1 / pv, 6) AS top1_click_rate_query,
+    ROUND(click_query_cnt_top3 / pv, 6) AS top3_click_rate_query,
+    ROUND(click_query_cnt_top5 / pv, 6) AS top5_click_rate_query,
+    ROUND(click_query_cnt_top10 / pv, 6) AS top10_click_rate_query,
+    ROUND(order_query_cnt_top1 / pv, 6) AS top1_order_rate_query,
+    ROUND(order_query_cnt_top3 / pv, 6) AS top3_order_rate_query,
+    ROUND(order_query_cnt_top5 / pv, 6) AS top5_order_rate_query,
+    ROUND(order_query_cnt_top10 / pv, 6) AS top10_order_rate_query,
+    d
+  FROM (
+    SELECT
+      d, channeltype, refername, allianceid, alliancesiteid,
+      CASE WHEN methodname = 'all' THEN 'all_list' ELSE methodname END AS methodname,
+      locale_group,
+      pv, uv, click_query_cnt, click_query_cnt_top1, click_query_cnt_top3,
+      click_query_cnt_top5, click_query_cnt_top10, click_query_cnt_top20,
+      order_query_cnt, order_query_cnt_top1, order_query_cnt_top3,
+      order_query_cnt_top5, order_query_cnt_top10, order_query_cnt_top20,
+      expo_hotel_count
+    FROM %s
+    UNION ALL
+    SELECT
+      d, channeltype, refername, allianceid, alliancesiteid,
+      CASE WHEN methodname = 'all' THEN 'all_model_list' ELSE methodname END AS methodname,
+      locale_group,
+      pv, uv, click_query_cnt, click_query_cnt_top1, click_query_cnt_top3,
+      click_query_cnt_top5, click_query_cnt_top10, click_query_cnt_top20,
+      order_query_cnt, order_query_cnt_top1, order_query_cnt_top3,
+      order_query_cnt_top5, order_query_cnt_top10, order_query_cnt_top20,
+      expo_hotel_count
+    FROM %s
+  ) u
+""", target_table_name, source_table_detail, source_table_group);
+
+EXECUTE IMMEDIATE query;
+
+================================================================================
+3. 校验结果
+================================================================================
+Hive SQL 验证: ✓ 通过
+
+
+BigQuery 验证: ✓ 通过
+验证模式: dry_run
+
+
+================================================================================
+4. 转换统计
+================================================================================
+重试次数: 0
+整体结果: ✓ 成功
+
+
+================================================================================
+5. 转换历史
+================================================================================
+
+--- 尝试 1 ---
+无错误
+
+================================================================================
+END OF REPORT
+================================================================================

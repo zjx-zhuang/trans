@@ -1,0 +1,54 @@
+================================================================================
+SQL 转换报告
+================================================================================
+生成时间: 2026-01-20T07:53:08.757Z
+转换耗时: 9.34s
+
+================================================================================
+1. 原始 Hive SQL
+================================================================================
+set hivevar:date_app=${zdt.addDay(-1).format("yyyyMMdd")}_test;
+
+
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_agg_detail_${date_app};
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_agg_group_${date_app};
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_qid_agg_${date_app};
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_base_${date_app};
+
+================================================================================
+2. 转换后的 BigQuery SQL
+================================================================================
+DECLARE date_app STRING DEFAULT CONCAT(FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)), '_test');
+
+EXECUTE IMMEDIATE FORMAT('DROP TABLE IF EXISTS `trip-htl-bi-dbprj.htl_bi_temp.tmp_ibu_overall_agg_detail_%s`', date_app);
+EXECUTE IMMEDIATE FORMAT('DROP TABLE IF EXISTS `trip-htl-bi-dbprj.htl_bi_temp.tmp_ibu_overall_agg_group_%s`', date_app);
+EXECUTE IMMEDIATE FORMAT('DROP TABLE IF EXISTS `trip-htl-bi-dbprj.htl_bi_temp.tmp_ibu_overall_qid_agg_%s`', date_app);
+EXECUTE IMMEDIATE FORMAT('DROP TABLE IF EXISTS `trip-htl-bi-dbprj.htl_bi_temp.tmp_ibu_overall_base_%s`', date_app);
+
+================================================================================
+3. 校验结果
+================================================================================
+Hive SQL 验证: ✓ 通过
+
+
+BigQuery 验证: ✓ 通过
+验证模式: dry_run
+
+
+================================================================================
+4. 转换统计
+================================================================================
+重试次数: 0
+整体结果: ✓ 成功
+
+
+================================================================================
+5. 转换历史
+================================================================================
+
+--- 尝试 1 ---
+无错误
+
+================================================================================
+END OF REPORT
+================================================================================

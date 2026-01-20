@@ -1,0 +1,402 @@
+================================================================================
+SQL 转换报告
+================================================================================
+生成时间: 2026-01-20T09:14:16.309Z
+转换耗时: 169.34s
+
+================================================================================
+1. 原始 Hive SQL
+================================================================================
+use dw_htlbizdb;
+
+with tmp_kwfu_table as (
+    select
+        event_id
+        ,key
+        ,channeltype --渠道
+        ,t.starttime --埋点触发时间
+        ,t.cid --  用户设备标识
+        ,t.uid--用户id
+        ,t.vid --用户唯一标识，主要是非app统计用户数用
+        ,t.pvid --页面自增长ID
+        ,t.sid --会话ID
+        ,t.page  --页面ID/CODE
+        ,appversion --客户端app版本号
+        ,regexp_replace(checkin,'^(\\d{4})[/\-]?(\\d{2})[/\-]?(\\d{2})$','$1-$2-$3') as checkin --入住日期
+        ,regexp_replace(checkout,'^(\\d{4})[/\-]?(\\d{2})[/\-]?(\\d{2})$','$1-$2-$3') as checkout --离店日期
+        ,roomnum  --房间数
+        ,adultnum--成人数
+        ,childnum  --儿童数
+        ,nvl(srmlist,'[]') as srmlist --房型列表 -- null时设置为[],与udf.json_split兼容
+        ,rmlist_tracelogid --房型列表服务ID
+        ,allianceid --aid
+        ,alliancesiteid --sid
+        ,is_spider --
+        ,locale --站点
+        ,t.data['domain'] as domain 
+        ,is_meta 
+        ,masterhotelid 
+        ,isnoprice 
+        ,userip --客户端ip
+        ,get_json_object(lower(t.data['value']),'$.user_level') as user_level --用户等级身份
+        ,childage
+        --2023-03-28 kw.fu
+        ,hotelpriceroomid
+        ,hotelprice
+        ,sourcetype
+        ,source_id
+        ,ouid
+        ,datacenter
+        ,couponinfo    --优惠券信息list
+        ,mergedRoomInfos -- 合并房型信息List
+        -- 2023-12-08 曾金平
+        ,meta_roomid    -- #投放房型的roomid
+        ,isvalid_case    -- #是否是有效case，字段未埋就是有效，无效则埋具体无效原因
+        ,meta_avgprice    -- #投放的税前均价
+        ,meta_totalprice --#投放的税后总价
+        ,org_rmlist --原始roomlist节点
+        ,time_gap
+        ,hotelroomtype -- 需要监控的价格一致性类型:1起价房型 2指定房型
+        ,hoteldeleteprice --酒店划线价
+        ,hotelpriceroomtoken --房型编号
+        ,pre_masterhotelid_tracelogid 
+        ,is_landdtl 
+        ,meta_vendorid 
+        ,spider_type
+        ,is_CaliforniaPrice
+        ,fullroom_reason
+        ,bookableDateList
+        ,filterlist_main
+        ,showtype_main
+        ,is_includetaxpayhotel
+        ,meta_rateid,meta_rateplanid
+        ,t.d
+        ,t.h
+    from dw_htlbizdb.edw_traf_ht_htl_servercustom_hour_new t 
+    lateral view json_tuple(t.data['value'],
+        'channeltype', 'appversion', 'checkin', 'checkout', 'roomnum', 'adultnum', 'childnum', 
+        'srmlist', 'rmlist_tracelogid', 'allianceid', 'alliancesiteid', 'is_spider', 'locale', 
+        'is_meta', 'masterhotelid', 'isnoprice', 'userip', 'childage', 'hotelpriceroomid', 
+        'hotelprice', 'sourcetype', 'source_id', 'ouid', 'datacenter', 'couponinfo', 'mergedRoomInfos',
+        'meta_roomid', 'isvalid_case', 'meta_avgprice', 'meta_totalprice', 'org_rmlist', 'time_gap',
+        'hotelroomtype', 'hoteldeleteprice', 'hotelpriceroomtoken', 'pre_masterhotelid_tracelogid',
+        'is_landdtl', 'meta_vendorid', 'spider_type', 'is_CaliforniaPrice', 'fullroom_reason',
+        'bookableDateList', 'filterlist', 'showType', 'is_includetaxpayhotel','meta_rateid','meta_rateplanid'
+    ) jt as channeltype, appversion, checkin, checkout, roomnum, adultnum, childnum, 
+        srmlist, rmlist_tracelogid, allianceid, alliancesiteid, is_spider, locale, 
+        is_meta, masterhotelid, isnoprice, userip, childage, hotelpriceroomid, 
+        hotelprice, sourcetype, source_id, ouid, datacenter, couponinfo, mergedRoomInfos,
+        meta_roomid, isvalid_case, meta_avgprice, meta_totalprice, org_rmlist, time_gap,
+        hotelroomtype, hoteldeleteprice, hotelpriceroomtoken, pre_masterhotelid_tracelogid,
+        is_landdtl, meta_vendorid, spider_type, is_CaliforniaPrice, fullroom_reason,
+        bookableDateList, filterlist_main, showtype_main, is_includetaxpayhotel,meta_rateid,meta_rateplanid
+    where t.d='${zdt.add(10,-1).format("yyyy-MM-dd")}' 
+        and t.h='${zdt.add(10,-1).format("HH")}' 
+        and t.key = 'trip_rmlist_server_ser'
+        and nvl(t.data['value'],'')<>''
+        and coalesce(get_json_object(t.data['value'],'$.from_env'),'') not in ('mirror')
+),
+exploded_data as (
+    select
+        t.*
+        ,r.rm_json 
+        ,roomid
+        ,room_token
+        ,rateplanid
+        ,currency
+        ,rm_dispatchid, isguessyoulike, fq_price, fh_price, fh_price_total, fh_price_avg, 
+        tax, tax_total, tax_avg, cost, shadowid, maskid, pkg_id, ishourroom, isbookable, 
+        bedtype, meal, mealnum, area, cancelpolicy, iscomfirm, roomperson, comfirmhour, 
+        guaranteetype, paytype, promotionlist, filterlist, age, smokeinfo, cancelpriceinfo, 
+        showpriceinfo, showwithtaxpriceinfo, deduct, refund, iswifi, confirmpolicy, 
+        minstartrooms, maxstartrooms, windowinfo, isfullapply, roomtype, exchange, 
+        floorpiece, fh_price_avg_alltax, fh_price_total_alltax, showtype, guestsnum, 
+        isVeilDiffPriceZero, sceneType, isroomlist, ismeta_show, roomtag, prepayDiscountList, 
+        cost_promotion, remainRoomQuantity, rank, mealType, basicroomid, is_start_room, 
+        ismultiroomrecommend, recommend_roomnum, isentityroom, packagecontent, cancelPolicyType, 
+        cancelpolicy_desc, cancelLadderDetails, is_presale_frontload, presale_pkgid, 
+        presale_price, roomperson_adult, roomperson_child, entityroom_desc, iscombine_ser, 
+        avgprice_beforetax, isMaskRoom, bedtypeCategory, pkgSaleInfo, afterBookingFreeCancelTime, 
+        CancelPolicyNewType, child_tag_checkin, child_tag_meal, combined_room_info, 
+        recommendtype, noprice, vendorid, xpkg_id, xpkg_type, meal_prompt_tag, rm_taglist, 
+        coins_quantity, is_extra_coins, roomrecommend_status, iscompensate, incentiveTagList,rateid
+    from tmp_kwfu_table t
+    lateral view outer explode(udf.json_split(t.srmlist)) r as rm_json
+    lateral view json_tuple(rm_json,
+        'roomid', 'room_token', 'rm_dispatchid', 'isguessyoulike', 'fq_price', 'fh_price', 
+        'fh_price_total', 'fh_price_avg', 'tax', 'tax_total', 'tax_avg', 'cost', 'shadowid', 
+        'maskid', 'pkg_id', 'ishourroom', 'isbookable', 'bedtype', 'meal', 'mealnum', 'area', 
+        'cancelpolicy', 'iscomfirm', 'roomperson', 'comfirmhour', 'guaranteetype', 'paytype', 
+        'promotionlist', 'filterlist', 'age', 'smokeinfo', 'cancelpriceinfo', 'showpriceinfo', 
+        'showwithtaxpriceinfo', 'deduct', 'refund', 'iswifi', 'confirmpolicy', 'minstartrooms', 
+        'maxstartrooms', 'windowinfo', 'isfullapply', 'roomtype', 'exchange', 'floorpiece', 
+        'fh_price_avg_alltax', 'fh_price_total_alltax', 'rateplanid', 'currency', 'showtype', 'guestsnum', 
+        'isVeilDiffPriceZero', 'sceneType', 'isroomlist', 'ismeta_show', 'roomtag', 
+        'prepayDiscountList', 'cost_promotion', 'remainRoomQuantity', 'rank', 'mealType', 
+        'basicroomid', 'is_start_room', 'ismultiroomrecommend', 'recommend_roomnum', 
+        'isentityroom', 'packagecontent', 'cancelPolicyType', 'cancelpolicy_desc', 
+        'cancelLadderDetails', 'is_presale_frontload', 'presale_pkgid', 'presale_price', 
+        'roomperson_adult', 'roomperson_child', 'entityroom_desc', 'iscombine_ser', 
+        'avgprice_beforetax', 'isMaskRoom', 'bedtypeCategory', 'pkgSaleInfo', 
+        'afterBookingFreeCancelTime', 'CancelPolicyNewType', 'child_tag_checkin', 
+        'child_tag_meal', 'combined_room_info', 'recommendtype', 'noprice', 'vendorid', 
+        'xpkg_id', 'xpkg_type', 'meal_prompt_tag', 'rm_taglist', 'coins_quantity', 
+        'is_extra_coins', 'roomrecommend_status', 'iscompensate', 'incentiveTagList','rateid'
+    ) jt as roomid, room_token, rm_dispatchid, isguessyoulike, fq_price, fh_price, 
+        fh_price_total, fh_price_avg, tax, tax_total, tax_avg, cost, shadowid, maskid, 
+        pkg_id, ishourroom, isbookable, bedtype, meal, mealnum, area, cancelpolicy, 
+        iscomfirm, roomperson, comfirmhour, guaranteetype, paytype, promotionlist, 
+        filterlist, age, smokeinfo, cancelpriceinfo, showpriceinfo, showwithtaxpriceinfo, 
+        deduct, refund, iswifi, confirmpolicy, minstartrooms, maxstartrooms, windowinfo, 
+        isfullapply, roomtype, exchange, floorpiece, fh_price_avg_alltax, fh_price_total_alltax, 
+        rateplanid, currency, showtype, guestsnum, isVeilDiffPriceZero, sceneType, isroomlist, 
+        ismeta_show, roomtag, prepayDiscountList, cost_promotion, remainRoomQuantity, 
+        rank, mealType, basicroomid, is_start_room, ismultiroomrecommend, recommend_roomnum, 
+        isentityroom, packagecontent, cancelPolicyType, cancelpolicy_desc, cancelLadderDetails, 
+        is_presale_frontload, presale_pkgid, presale_price, roomperson_adult, roomperson_child, 
+        entityroom_desc, iscombine_ser, avgprice_beforetax, isMaskRoom, bedtypeCategory, 
+        pkgSaleInfo, afterBookingFreeCancelTime, CancelPolicyNewType, child_tag_checkin, 
+        child_tag_meal, combined_room_info, recommendtype, noprice, vendorid, xpkg_id, 
+        xpkg_type, meal_prompt_tag, rm_taglist, coins_quantity, is_extra_coins, 
+        roomrecommend_status, iscompensate, incentiveTagList,rateid
+)
+
+================================================================================
+2. 转换后的 BigQuery SQL
+================================================================================
+with base_raw_data as (
+    select
+        t.event_id,
+        t.key,
+        t.starttime,
+        t.cid,
+        t.uid,
+        t.vid,
+        t.pvid,
+        t.sid,
+        t.page,
+        t.d,
+        t.h,
+        -- Extract 'value' as a JSON string from the ARRAY<STRUCT<key, value>> column 'data'
+        (SELECT value FROM UNNEST(t.data) WHERE key = 'value') as data_value_json_string,
+        -- Extract 'domain' from the ARRAY<STRUCT<key, value>> column 'data'
+        (SELECT value FROM UNNEST(t.data) WHERE key = 'domain') as domain_from_data_array
+    from `trip-htl-bi-dbprj.htl_bi_temp.dw_htlbizdb_edw_traf_ht_htl_servercustom_hour_new` t
+    where t.d = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+        and t.h = FORMAT_TIMESTAMP('%H', TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR))
+        and t.key = 'trip_rmlist_server_ser'
+),
+tmp_kwfu_table as (
+    select
+        b.event_id
+        ,b.key
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.channeltype') as channeltype --渠道
+        ,b.starttime --埋点触发时间
+        ,b.cid --  用户设备标识
+        ,b.uid--用户id
+        ,b.vid --用户唯一标识，主要是非app统计用户数用
+        ,b.pvid --页面自增长ID
+        ,b.sid --会话ID
+        ,b.page  --页面ID/CODE
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.appversion') as appversion --客户端app版本号
+        ,REGEXP_REPLACE(JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.checkin'), r'^(\d{4})[/\-]?(\d{2})[/\-]?(\d{2})$', r'\1-\2-\3') as checkin --入住日期
+        ,REGEXP_REPLACE(JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.checkout'), r'^(\d{4})[/\-]?(\d{2})[/\-]?(\d{2})$', r'\1-\2-\3') as checkout --离店日期
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.roomnum') as roomnum  --房间数
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.adultnum') as adultnum--成人数
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.childnum') as childnum  --儿童数
+        ,COALESCE(JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.srmlist'),'[]') as srmlist --房型列表 -- null时设置为[],与udf.json_split兼容
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.rmlist_tracelogid') as rmlist_tracelogid --房型列表服务ID
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.allianceid') as allianceid --aid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.alliancesiteid') as alliancesiteid --sid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.is_spider') as is_spider --
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.locale') as locale --站点
+        ,b.domain_from_data_array as domain -- Use the extracted domain string
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.is_meta') as is_meta
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.masterhotelid') as masterhotelid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.isnoprice') as isnoprice
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.userip') as userip --客户端ip
+        ,JSON_EXTRACT_SCALAR(LOWER(b.data_value_json_string),'$.user_level') as user_level --用户等级身份
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.childage') as childage
+        --2023-03-28 kw.fu
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.hotelpriceroomid') as hotelpriceroomid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.hotelprice') as hotelprice
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.sourcetype') as sourcetype
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.source_id') as source_id
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.ouid') as ouid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.datacenter') as datacenter
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.couponinfo') as couponinfo    --优惠券信息list
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.mergedRoomInfos') as mergedRoomInfos -- 合并房型信息List
+        -- 2023-12-08 曾金平
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.meta_roomid') as meta_roomid    -- #投放房型的roomid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.isvalid_case') as isvalid_case    -- #是否是有效case，字段未埋就是有效，无效则埋具体无效原因
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.meta_avgprice') as meta_avgprice    -- #投放的税前均价
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.meta_totalprice') as meta_totalprice --#投放的税后总价
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.org_rmlist') as org_rmlist --原始roomlist节点
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.time_gap') as time_gap
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.hotelroomtype') as hotelroomtype -- 需要监控的价格一致性类型:1起价房型 2指定房型
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.hoteldeleteprice') as hoteldeleteprice --酒店划线价
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.hotelpriceroomtoken') as hotelpriceroomtoken --房型编号
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.pre_masterhotelid_tracelogid') as pre_masterhotelid_tracelogid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.is_landdtl') as is_landdtl
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.meta_vendorid') as meta_vendorid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.spider_type') as spider_type
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.is_CaliforniaPrice') as is_CaliforniaPrice
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.fullroom_reason') as fullroom_reason
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.bookableDateList') as bookableDateList
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.filterlist') as filterlist_main
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.showType') as showtype_main
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.is_includetaxpayhotel') as is_includetaxpayhotel
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.meta_rateid') as meta_rateid
+        ,JSON_EXTRACT_SCALAR(b.data_value_json_string, '$.meta_rateplanid') as meta_rateplanid
+        ,b.d
+        ,b.h
+    from base_raw_data b
+    where COALESCE(b.data_value_json_string,'') <> ''
+        and COALESCE(JSON_EXTRACT_SCALAR(b.data_value_json_string,'$.from_env'),'') not in ('mirror')
+),
+exploded_data as (
+    select
+        t.* EXCEPT (srmlist)
+        ,rm_json_element as rm_json
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.roomid') as roomid
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.room_token') as room_token
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.rateplanid') as rateplanid
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.currency') as currency
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.rm_dispatchid') as rm_dispatchid
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.isguessyoulike') as isguessyoulike
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.fq_price') as fq_price
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.fh_price') as fh_price
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.fh_price_total') as fh_price_total
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.fh_price_avg') as fh_price_avg
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.tax') as tax
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.tax_total') as tax_total
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.tax_avg') as tax_avg
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.cost') as cost
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.shadowid') as shadowid
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.maskid') as maskid
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.pkg_id') as pkg_id
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.ishourroom') as ishourroom
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.isbookable') as isbookable
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.bedtype') as bedtype
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.meal') as meal
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.mealnum') as mealnum
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.area') as area
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.cancelpolicy') as cancelpolicy
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.iscomfirm') as iscomfirm
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.roomperson') as roomperson
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.comfirmhour') as comfirmhour
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.guaranteetype') as guaranteetype
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.paytype') as paytype
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.promotionlist') as promotionlist
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.filterlist') as filterlist
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.age') as age
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.smokeinfo') as smokeinfo
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.cancelpriceinfo') as cancelpriceinfo
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.showpriceinfo') as showpriceinfo
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.showwithtaxpriceinfo') as showwithtaxpriceinfo
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.deduct') as deduct
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.refund') as refund
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.iswifi') as iswifi
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.confirmpolicy') as confirmpolicy
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.minstartrooms') as minstartrooms
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.maxstartrooms') as maxstartrooms
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.windowinfo') as windowinfo
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.isfullapply') as isfullapply
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.roomtype') as roomtype
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.exchange') as exchange
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.floorpiece') as floorpiece
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.fh_price_avg_alltax') as fh_price_avg_alltax
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.fh_price_total_alltax') as fh_price_total_alltax
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.showtype') as showtype
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.guestsnum') as guestsnum
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.isVeilDiffPriceZero') as isVeilDiffPriceZero
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.sceneType') as sceneType
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.isroomlist') as isroomlist
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.ismeta_show') as ismeta_show
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.roomtag') as roomtag
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.prepayDiscountList') as prepayDiscountList
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.cost_promotion') as cost_promotion
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.remainRoomQuantity') as remainRoomQuantity
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.rank') as rank
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.mealType') as mealType
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.basicroomid') as basicroomid
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.is_start_room') as is_start_room
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.ismultiroomrecommend') as ismultiroomrecommend
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.recommend_roomnum') as recommend_roomnum
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.isentityroom') as isentityroom
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.packagecontent') as packagecontent
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.cancelPolicyType') as cancelPolicyType
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.cancelpolicy_desc') as cancelpolicy_desc
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.cancelLadderDetails') as cancelLadderDetails
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.is_presale_frontload') as is_presale_frontload
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.presale_pkgid') as presale_pkgid
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.presale_price') as presale_price
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.roomperson_adult') as roomperson_adult
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.roomperson_child') as roomperson_child
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.entityroom_desc') as entityroom_desc
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.iscombine_ser') as iscombine_ser
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.avgprice_beforetax') as avgprice_beforetax
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.isMaskRoom') as isMaskRoom
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.bedtypeCategory') as bedtypeCategory
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.pkgSaleInfo') as pkgSaleInfo
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.afterBookingFreeCancelTime') as afterBookingFreeCancelTime
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.CancelPolicyNewType') as CancelPolicyNewType
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.child_tag_checkin') as child_tag_checkin
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.child_tag_meal') as child_tag_meal
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.combined_room_info') as combined_room_info
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.recommendtype') as recommendtype
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.noprice') as noprice
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.vendorid') as vendorid
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.xpkg_id') as xpkg_id
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.xpkg_type') as xpkg_type
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.meal_prompt_tag') as meal_prompt_tag
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.rm_taglist') as rm_taglist
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.coins_quantity') as coins_quantity
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.is_extra_coins') as is_extra_coins
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.roomrecommend_status') as roomrecommend_status
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.iscompensate') as iscompensate
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.incentiveTagList') as incentiveTagList
+        ,JSON_EXTRACT_SCALAR(rm_json_element, '$.rateid') as rateid
+    from tmp_kwfu_table t
+    LEFT JOIN UNNEST(JSON_EXTRACT_ARRAY(t.srmlist)) AS rm_json_element
+)
+SELECT * FROM exploded_data
+
+================================================================================
+3. 校验结果
+================================================================================
+Hive SQL 验证: ✓ 通过
+
+
+BigQuery 验证: ✓ 通过
+验证模式: dry_run
+
+
+================================================================================
+4. 转换统计
+================================================================================
+重试次数: 2
+整体结果: ✓ 成功
+
+
+================================================================================
+5. 转换历史
+================================================================================
+
+--- 尝试 1 ---
+错误: Syntax error: Unexpected end of script at [177:2] (at q)
+
+--- 尝试 2 ---
+错误: No matching signature for function JSON_EXTRACT_SCALAR
+  Argument types: ARRAY<STRUCT<key STRING, value STRING>>, STRING
+  Signature: JSON_EXTRACT_SCALAR(STRING, [STRING])
+    Argument 1: Unable to coerce type ARRAY<STRUCT<key STRING, value STRING>> to expected type STRING
+  Signature: JSON_EXTRACT_SCALAR(JSON, [STRING])
+    Argument 1: Unable to coerce type ARRAY<STRUCT<key STRING, value STRING>> to expected type JSON at [69:22] (at q)
+
+--- 尝试 3 ---
+无错误
+
+================================================================================
+END OF REPORT
+================================================================================
