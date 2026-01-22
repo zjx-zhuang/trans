@@ -1,0 +1,220 @@
+insert overwrite table dwhtl.adm_svr_sqty_user_tour_trial_df partition(tag_1st, tag_2nd,d)
+
+select 	 t1.d as `date`
+		,tt.weekofyear as `week` 
+        ,tt.`month`
+      	,tt.`quarter`
+      	,tt.`year` 
+		,qa.qa_cycle as `qa_week` 
+      	,qa.month as `qa_month` 
+      	,qa.year as `qa_year`
+        ,coalesce(t3.is_agent,-1) as is_agent
+        ,-1 as custype
+        ,coalesce(t3.mbrship_level,-1) as mbrship_level
+        ,coalesce(t3.user_star,-1) as user_star
+        ,coalesce(t3.cus_city_level,-1) as cus_city_level
+        ,coalesce(t3.age_stage,-1) as age_stage
+        ,coalesce(t3.gender,-1) as gender
+        ,-1	as star	
+        ,-1 as star_level
+        ,-1 as ppp
+        -- ,coalesce(tc.global_type,-1) as global_type
+        ,case when tc.global_type='cn' then 1
+              when tc.global_type = 'en' then 3
+              when tc.global_type = 'hmt' then 2
+              else -1
+        end as global_type
+        
+        ,coalesce(tc.continent,-1) as continent_id
+        ,coalesce(tc.country,-1) as country_id
+        ,coalesce(tc.province,-1) as province_id
+        ,coalesce(tc.pcityid,-1) as pcity_id
+        ,coalesce(t1.cityid,-1) as city_id
+        ,coalesce(tc.areaname,'无法区分') as region3rd_name
+        ,coalesce(tc.warareaname,'无法区分') as region_name
+        ,'无法区分' as level
+        ,-1	as is_new_open_prpt	
+        -- ,coalesce(tc.pcitylevel,-1) as city_level
+        
+        ,case when tc.pcitylevel ='其他' then 0
+                when tc.pcitylevel ='新一线' then 1
+                when tc.pcitylevel ='一线' then 2
+                when tc.pcitylevel ='二线' then 3
+                when tc.pcitylevel ='三线' then 4
+                when tc.pcitylevel ='四线' then 5
+                when tc.pcitylevel ='五线' then 6
+                when tc.pcitylevel = '五线以下' then 7
+                else -1
+        end as city_level
+        ,-1 as is_standard
+        ,-1 as chain_id
+        ,-1 as is_cfh
+        ,-1 as invt_class
+        ,-1 as pay_type
+        ,-1 as fastpass
+        ,-1 as cxlpolicy
+        ,-1 as invoice_way
+        ,-1 as svr_level
+        ,-1 as send_type
+        ,-1 as leadtime
+        ,-1 as adr_range
+        ,-1 as bk_chl
+        ,1 as is_tcom		-- trip
+        ,'无法区分' as site
+        ,'无法区分' as site_eur
+        ,'无法区分' as locale
+        ,-1 as is_weehourroom_ord
+        ,-1 as is_multi_rn_ord
+        ,-1 as is_multidays_ord
+        ,-1 as is_latecheckout_ord
+        ,-1 as tour_type
+        ,-1 as is_nlocal_ord
+        ,-1 as is_abroad_ord
+        ,-1 as is_cross_ord
+        ,coalesce(zy.process,'无法区分') as process
+        ,'' as user_experience_1st
+        ,'' as user_experience_2nd
+        ,-1 as user_request
+        ,-1 as svr_target
+        ,-1 as user_emotion
+        ,-1 as svr_able
+        ,-1 as handle_rslt
+        ,-1 as issue_pg
+        ,-1 as issue_relation
+        ,-1 as issue_type
+        ,-1 as issue_reason
+        ,-1 as issue_inq
+  		,sum(t1.pv) as pv
+  		,-1 as deno
+        ,-1					  										as nume_1st
+        ,-1															as deno_1st
+        ,-1															as user_source
+        ,coalesce(zy1.tag_id,9999)               as user_experience_id
+        
+        ,coalesce(extra_user_info,'{}') as extra_user_info
+        ,'{}' as extra_prpt_info
+        ,'{}' as extra_ord_info
+        
+        ,'SXDJL' as tag_1st
+        ,'SXDJL' as tag_2nd
+        ,'${zdt.addDay(-0).format("yyyy-MM-dd")}' as d
+from (     
+    select t1.uid,t1.cityid,t1.d,count(distinct t1.cid) as pv
+    from (
+        -- 1
+        select cid,sid,pvid,regionid as cityid,uid,d
+        from dw_htlbizdb.edw_traf_ht_key_list_filter_sorttype_click_day
+        where regiontype=1
+        and page=10320607445
+        union all
+        select cid,sid,pvid,b.geoid as cityid,a.uid,a.d
+        from dw_htlbizdb.edw_traf_ht_key_list_filter_sorttype_click_day a
+        join ods_htl_htlinfopediadb.poi b on a.regionid=b.id and b.geocategoryid=3 and b.d='${zdt.addDay(-1).format("yyyy-MM-dd")}'
+        where a.regiontype=4
+        and page=10320607445
+        -- 2
+        union all
+        select cid,sid,pvid,cityid,uid,d
+        from dw_htlbizdb.edw_traf_ht_key_listpage_filterpage_location_click_day 
+        where page in (10320607445,10320664776)
+        union all 
+        select a.cid,a.sid,a.pvid,b.geoid as cityid,a.uid,a.d
+        from dw_htlbizdb.edw_traf_ht_key_listpage_filterpage_location_click_day a
+        join ods_htl_htlinfopediadb.poi b on a.regionid=b.id and b.geocategoryid=3 and b.d='${zdt.addDay(-1).format("yyyy-MM-dd")}'
+        where a.regiontype=4
+        and a.page in (10320607445,10320664776)
+        -- 3
+        union all
+        select cid,sid,pvid,cityid,uid,d
+        from dw_htlbizdb.edw_traf_ht_key_listpage_filterpage_click_day
+        where regiontype=1
+        and page=10320607445
+        union all
+        select a.cid,a.sid,a.pvid,b.geoid as cityid,a.uid,a.d
+        from dw_htlbizdb.edw_traf_ht_key_listpage_filterpage_click_day a
+        join ods_htl_htlinfopediadb.poi b on a.regionid=b.id and b.geocategoryid=3 and b.d='${zdt.addDay(-1).format("yyyy-MM-dd")}'
+        where a.regiontype=4
+        and a.page=10320607445
+    ) t1
+    join dim_hoteldb.dimcity tc
+    on t1.cityid=tc.cityid
+    and tc.currentflag='T'
+    where substr(t1.d,1,4) not in ('2020','2021','2022')
+    and t1.d >='2019-01-01'
+    group by t1.uid,t1.cityid,t1.d
+) t1  -- 分子
+
+join dim_hoteldb.dimcity tc
+on t1.cityid=tc.cityid
+and tc.currentflag='T'
+
+left join dwhtl.dimdate tt
+on to_date(t1.d) = tt.date
+
+left join dwhtl.dim_htl_svr_qacycle_lkp qa
+on qa.date = to_date(t1.d)
+
+left join dwhtl.dim_svr_sqty_tour_trial_user_tag_df t3
+on lower(t1.uid) = lower(t3.user_id)
+and t3.d = '${zdt.addDay(0).format("yyyy-MM-dd")}'
+
+left outer join 
+(
+    select *
+            ,row_number() over(partition by idx order by version desc) as rk
+    from dwhtl.ods_data_upload_new_insights_idx_process__experiencetag_mapping_backlog
+    where version = 2 
+    having rk = 1
+) zy
+on 1=1 
+and zy.idx = 'SXDJL'
+
+left join (
+    select *
+            ,rank() over(order by version desc) as rk
+    from dwhtl.ods_data_upload_new_insights_process__experiencetag_mapping_backlog
+    having rk = 1
+) zy1
+on zy.tag_id = zy1.tag_id 
+
+
+group by  t1.d
+		,tt.weekofyear 
+        ,tt.`month`
+      	,tt.`quarter`
+      	,tt.`year` 
+		,qa.qa_cycle 
+      	,qa.month
+      	,qa.year 
+        ,coalesce(t3.is_agent,-1) 
+        ,coalesce(t3.mbrship_level,-1) 
+        ,coalesce(t3.user_star,-1) 
+        ,coalesce(t3.cus_city_level,-1) 
+        ,coalesce(t3.age_stage,-1)
+        ,coalesce(t3.gender,-1) 
+
+        ,case when tc.global_type='cn' then 1
+              when tc.global_type = 'en' then 3
+              when tc.global_type = 'hmt' then 2
+              else -1
+        end
+        ,coalesce(tc.continent,-1) 
+        ,coalesce(tc.country,-1) 
+        ,coalesce(tc.province,-1)
+        ,coalesce(tc.pcityid,-1)
+        ,coalesce(t1.cityid,-1) 
+        ,coalesce(tc.areaname,'无法区分') 
+        ,coalesce(tc.warareaname,'无法区分') 
+        ,case when tc.pcitylevel ='其他' then 0
+                when tc.pcitylevel ='新一线' then 1
+                when tc.pcitylevel ='一线' then 2
+                when tc.pcitylevel ='二线' then 3
+                when tc.pcitylevel ='三线' then 4
+                when tc.pcitylevel ='四线' then 5
+                when tc.pcitylevel ='五线' then 6
+                when tc.pcitylevel = '五线以下' then 7
+                else -1
+        end
+        ,coalesce(zy.process,'无法区分')
+        ,coalesce(zy1.tag_id,9999) 
+        ,coalesce(extra_user_info,'{}')

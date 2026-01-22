@@ -587,7 +587,7 @@ def run_test(base_url: str, test_case: TestCase) -> dict:
 
 def main():
     """Run all test cases."""
-    base_url = os.getenv("API_URL", "http://localhost:8000")
+    base_url = os.getenv("API_URL", "")
     
     print("=" * 60)
     print("Hive to BigQuery SQL Conversion Test Suite")

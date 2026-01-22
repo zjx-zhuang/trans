@@ -10,6 +10,7 @@ from src.agent.nodes import (
     validate_node,
     fix_node,
     validate_hive_node,
+    table_mapping_node,
 )
 from src.agent.state import AgentState
 
@@ -21,22 +22,22 @@ def get_max_retries() -> int:
         Maximum retry count, defaults to 1.
     """
     try:
-        return int(os.getenv("MAX_RETRIES", "1"))
+        return int(os.getenv("MAX_RETRIES", "15"))
     except ValueError:
         return 1
 
 
-def should_continue_after_hive_validation(state: AgentState) -> Literal["convert", "end"]:
+def should_continue_after_hive_validation(state: AgentState) -> Literal["table_mapping", "end"]:
     """Determine if we should continue after Hive validation.
     
     Args:
         state: Current agent state.
         
     Returns:
-        "convert" if Hive SQL is valid, "end" otherwise.
+        "table_mapping" if Hive SQL is valid, "end" otherwise.
     """
     if state["hive_valid"]:
-        return "convert"
+        return "table_mapping"
     return "end"
 
 
@@ -53,11 +54,25 @@ def should_retry_after_validation(state: AgentState) -> Literal["fix", "end"]:
         return "end"
     
     # Check if we have retries left
-    max_retries = state.get("max_retries", 3)
+    max_retries = state.get("max_retries", 15)
     if state["retry_count"] < max_retries:
         return "fix"
     
     return "end"
+
+
+def should_continue_after_mapping(state: AgentState) -> Literal["convert", "end"]:
+    """Determine if we should continue after table mapping.
+    
+    Args:
+        state: Current agent state.
+        
+    Returns:
+        "convert" if mapping was successful, "end" otherwise.
+    """
+    if state.get("mapping_error"):
+        return "end"
+    return "convert"
 
 
 def create_sql_converter_graph() -> StateGraph:
@@ -71,6 +86,7 @@ def create_sql_converter_graph() -> StateGraph:
     
     # Add nodes
     workflow.add_node("validate_hive", validate_hive_node)
+    workflow.add_node("table_mapping", table_mapping_node)
     workflow.add_node("convert", convert_node)
     workflow.add_node("validate", validate_node)
     workflow.add_node("fix", fix_node)
@@ -82,6 +98,16 @@ def create_sql_converter_graph() -> StateGraph:
     workflow.add_conditional_edges(
         "validate_hive",
         should_continue_after_hive_validation,
+        {
+            "table_mapping": "table_mapping",
+            "end": END,
+        }
+    )
+    
+    # Add conditional edge after table mapping
+    workflow.add_conditional_edges(
+        "table_mapping",
+        should_continue_after_mapping,
         {
             "convert": "convert",
             "end": END,
@@ -128,6 +154,7 @@ def run_conversion(hive_sql: str, max_retries: int | None = None) -> AgentState:
         "hive_sql": hive_sql,
         "hive_valid": False,
         "hive_error": None,
+        "mapping_error": None,
         "bigquery_sql": None,
         "validation_success": False,
         "validation_error": None,

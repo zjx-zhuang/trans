@@ -15,6 +15,9 @@ class AgentState(TypedDict):
     hive_valid: bool
     hive_error: Optional[str]
     
+    # Table mapping results
+    mapping_error: Optional[str]
+    
     # Conversion results
     bigquery_sql: Optional[str]
     

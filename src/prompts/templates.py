@@ -42,8 +42,6 @@ HIVE_TO_BIGQUERY_PROMPT = """You are an expert SQL translator. Convert Hive SQL 
 {hive_sql}
 ```
 
-{table_mapping_info}
-
 ---
 
 ## Conversion Rules:
@@ -140,8 +138,21 @@ EXECUTE IMMEDIATE FORMAT('''
 | STRUCT<...> | STRUCT<...> |
 
 #### 1.1 Implicit Type Conversion - CRITICAL for String-to-Number Comparisons
+**Error to Fix:** `No matching signature for operator = for argument types: STRING, INT64`
+
 Hive allows implicit type conversion (string compared to number), but BigQuery does NOT.
 You MUST explicitly convert using SAFE_CAST:
+
+**1. Identify ID Columns:**
+Check all comparison operations involving these columns (which are often STRING in Hive but compared to numbers):
+- `hotelid`, `masterhotelid`, `hotel`, `cityid`, `city`, `countryid`, `country`
+- `star`, `status`, `type`, `country_flag`
+- Any column ending with `_id`, `_flag`, `_type`, `_code`
+
+**2. Explicit Casting Rule:**
+If left side is STRING and right side is INT64 (number), you MUST cast the left side!
+- ❌ `WHERE masterhotelid = 0`
+- ✅ `WHERE SAFE_CAST(masterhotelid AS INT64) = 0`
 
 | Hive Pattern | BigQuery Pattern |
 |--------------|------------------|
@@ -330,22 +341,30 @@ If you are concatenating numbers, you MUST cast them to STRING inside the array!
 | isnotnull(a) | a IS NOT NULL |
 
 #### 5.1 NVL/COALESCE Type Matching - CRITICAL
+**Error to Fix:** `Input types for <T1>: {{INT64, STRING}}` or `No matching signature for function COALESCE`
+
 **BigQuery's COALESCE/IFNULL requires ALL arguments to have the SAME type!**
 
-Hive allows `nvl(numeric_col, '')` (numeric with empty string fallback), but BigQuery will throw:
-`No matching signature for function COALESCE - Argument types: INT64, STRING`
-
 **Rules:**
-1. If the column is **Numeric** (star, score, rank, price, cnt, amount, count, num, qty, etc.), use **0** as default:
+1. **Check Error:** `Input types for <T1>: {{INT64, STRING}}` usually means `COALESCE(col, value)` has mismatched types.
+
+2. **ID/Code Columns (STRING):**
+   If `col` is an ID or Code (STRING), ensure the fallback value is also a STRING!
+   - ❌ `COALESCE(hotelid, 0)`  (hotelid is STRING, 0 is INT64)
+   - ✅ `COALESCE(hotelid, '0')` (Both are STRING)
+
+3. **Numeric Columns:**
+   If the column is **Numeric** (star, score, rank, price, cnt, amount, count, num, qty, etc.), use **0** as default:
    - `nvl(star, '')` → `COALESCE(star, 0)`
    - `nvl(price, '')` → `COALESCE(price, 0)`
    - `nvl(room_cnt, '')` → `COALESCE(room_cnt, 0)`
 
-2. If the column is **ID or code** that should be STRING, cast the column:
+4. **Explicit Casting:**
+   If you must mix types, CAST one to match the other:
    - `nvl(hotel_id, '')` → `COALESCE(CAST(hotel_id AS STRING), '')`
    - `nvl(city_code, '')` → `COALESCE(CAST(city_code AS STRING), '')`
 
-3. If column is already STRING, keep empty string:
+5. If column is already STRING, keep empty string:
    - `nvl(name, '')` → `COALESCE(name, '')`
 
 **Common Numeric Column Patterns (use 0 as default):**
@@ -715,12 +734,18 @@ use dw_htlbizdb;
 insert overwrite table dw_htlbizdb.target partition (d = '${{zdt.format("yyyy-MM-dd")}}')
 select col1, col2, ... from source;
 
--- BigQuery (remove USE, convert INSERT):
-DECLARE partition_d DATE DEFAULT CURRENT_DATE();
+-- BigQuery (标准 SQL):
+-- 1. 定义分区变量（可选，也可直接在 SQL 中写死）
+DECLARE target_d DATE DEFAULT DATE('${{zdt.format("yyyy-MM-dd")}}');
 
-CREATE OR REPLACE TABLE `project.dataset.target` AS
-SELECT col1, col2, ..., partition_d AS d
-FROM `project.dataset.source`;
+-- 2. 执行分区覆盖
+INSERT OVERWRITE `project.dataset.target` (col1, col2, d)
+SELECT 
+    col1, 
+    col2, 
+    target_d AS d
+FROM `project.dataset.source`
+WHERE ... ; -- 这里的过滤条件视业务逻辑而定
 ```
 
 #### Pattern 2: UDF to_json with Large Map
@@ -1258,6 +1283,68 @@ FIX_BIGQUERY_PROMPT = """You are an expert BigQuery SQL debugger. Fix the BigQue
   - Common ID columns (masterhotelid, cityid, country_flag, etc.) are STRING in source tables
   - Use `SAFE_CAST(column_name AS INT64)` when comparing to numbers
   - Example: `AND masterhotelid > 0` → `AND SAFE_CAST(masterhotelid AS INT64) > 0`
+
+
+### Date-String Comparison Fix (CRITICAL)
+如果错误信息包含 No matching signature for operator = for argument types: T1, T2，请按以下规则修复：
+
+1. DATE vs STRING (最常见：分区键与字符串比较)
+场景：WHERE d = '2026-01-22' 或 WHERE d = '${{zdt...}}'
+
+原理：BigQuery 的 DATE 类型必须与 DATE 类型比较，字符串不会隐式转换。
+
+修复动作：
+
+字面量/宏：使用 DATE() 包装字符串。
+
+✅ WHERE d = DATE('2026-01-22')
+
+✅ WHERE d = DATE('${{zdt.format("yyyy-MM-dd")}}')
+
+原生函数：如果宏已被转为 CURRENT_DATE()，请确保去掉引号。
+
+❌ WHERE d = 'CURRENT_DATE()' -> ✅ WHERE d = CURRENT_DATE()
+
+变量比较：WHERE d = CAST(var_name AS DATE)。
+
+2. STRING vs INT64 (常见于：ID、状态、标记位)
+场景：WHERE hotelid = 12345 或 WHERE masterhotelid > 0
+
+原理：Hive 允许字符串与数字混用，BigQuery 要求严格对齐。
+
+修复动作：
+
+推荐做法：使用 SAFE_CAST 转换 STRING 列。
+
+✅ WHERE SAFE_CAST(hotelid AS INT64) = 12345
+
+✅ WHERE SAFE_CAST(status AS INT64) IN (1, 2, 3)
+
+备选做法：如果该列逻辑上必须是字符串，给常量加引号。
+
+✅ WHERE type_code = '10'
+
+3. TIMESTAMP vs DATE (常见于：更新时间比较)
+场景：WHERE updatedt = '2026-01-22' 或 WHERE ts_col = d
+
+原理：时间戳（带时分秒）不能直接与日期（不带时分秒）比较。
+
+修复动作：
+
+截断时间戳：使用 DATE() 函数转换。
+
+✅ WHERE DATE(updatedt) = DATE('2026-01-22')
+
+常量转型：WHERE ts_col = TIMESTAMP(d)。
+
+4. COALESCE / IFNULL 参数不一致 (隐含的比较报错)
+场景：COALESCE(hotelid, 0) -> 如果 hotelid 是 STRING，会报类型不匹配。
+
+修复动作：确保默认值类型与列类型一致。
+
+✅ COALESCE(hotelid, '0') (保持 STRING)
+
+✅ COALESCE(SAFE_CAST(hotelid AS INT64), 0) (转为 INT64)
 
 ### Date Column Errors (PARSE_DATE errors)
 - **NEVER apply PARSE_DATE to partition column `d`** - it's already DATE type

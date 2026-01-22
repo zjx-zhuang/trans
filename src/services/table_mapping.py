@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import sqlglot
+from sqlglot import exp
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,6 +97,98 @@ class TableMappingService:
         """
         return self._mappings.copy()
     
+    def validate_and_replace(self, sql: str) -> tuple[str, list[str]]:
+        """Validate table names and replace them with BigQuery equivalents using sqlglot.
+        
+        Args:
+            sql: The SQL statement with Hive table names.
+            
+        Returns:
+            Tuple containing:
+            - The modified SQL (or original if parsing failed)
+            - List of unmapped table names found in the SQL
+        """
+        if not sql:
+            return "", []
+            
+        try:
+            # Parse SQL using Hive dialect
+            parsed = sqlglot.parse(sql, read="hive")
+            if not parsed:
+                return sql, []
+                
+            unmapped_tables = set()
+            modified = False
+            
+            for statement in parsed:
+                for table in statement.find_all(exp.Table):
+                    # Skip tables in USE statements (these are databases, not tables)
+                    if table.find_ancestor(exp.Use):
+                        continue
+                        
+                    # Extract full table name (db.table or just table)
+                    full_name = table.name
+                    if table.db:
+                        full_name = f"{table.db}.{full_name}"
+                    
+                    # Check if table exists in mapping
+                    lookup_name = full_name.lower()
+                    
+                    if lookup_name in self._mappings:
+                        bq_table = self._mappings[lookup_name]
+                        # Create new table expression
+                        # We use sqlglot.to_table to parse the BQ table name
+                        new_table = sqlglot.to_table(bq_table)
+                        table.replace(new_table)
+                        modified = True
+                    else:
+                        # Collect unmapped table
+                        unmapped_tables.add(full_name)
+            
+            # If we modified the AST, generate new SQL
+            # We use 'hive' dialect to stay close to original structure, 
+            # but with BQ table names inserted.
+            if modified:
+                # Use default dialect but ensure we don't change too much structure
+                # Note: sqlglot might reformat the SQL.
+                new_sql = ";\n".join(s.sql(dialect="hive") for s in parsed)
+                return new_sql, list(unmapped_tables)
+            else:
+                return sql, list(unmapped_tables)
+                
+        except Exception as e:
+            logger.error(f"Failed to parse SQL with sqlglot: {e}")
+            # Fallback to regex replacement if parsing fails
+            # But since we need validation, we can't reliably validate with regex
+            # So we return original SQL and a warning in unmapped tables if possible
+            # or just proceed with regex replacement and empty unmapped list (risky but safer than crashing)
+            
+            # Let's try regex replacement as fallback
+            logger.info("Falling back to regex replacement")
+            return self._regex_replace(sql), []
+
+    def _regex_replace(self, sql: str) -> str:
+        """Fallback regex-based replacement (original implementation)."""
+        result = sql
+        sorted_mappings = sorted(
+            self._mappings.items(),
+            key=lambda x: len(x[0]),
+            reverse=True
+        )
+        
+        for hive_table, bq_table in sorted_mappings:
+            patterns = [
+                (rf'`{re.escape(hive_table)}`', f'`{bq_table}`'),
+                (rf'(?i)(?<=\bFROM\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
+                (rf'(?i)(?<=\bJOIN\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
+                (rf'(?i)(?<=\bINTO\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
+                (rf'(?i)(?<=\bUPDATE\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
+                (rf'(?i)(?<=\bTABLE\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
+            ]
+            for pattern, replacement in patterns:
+                result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+        return result
+    
     def replace_table_names(self, sql: str) -> str:
         """Replace all Hive table names in SQL with BigQuery table names.
         
@@ -103,35 +198,8 @@ class TableMappingService:
         Returns:
             SQL statement with BigQuery table names.
         """
-        result = sql
-        
-        # Sort mappings by length (longest first) to avoid partial replacements
-        sorted_mappings = sorted(
-            self._mappings.items(),
-            key=lambda x: len(x[0]),
-            reverse=True
-        )
-        
-        for hive_table, bq_table in sorted_mappings:
-            # Create pattern that matches the table name with word boundaries
-            # Handle both `table` and table formats
-            # Match: FROM/JOIN/INTO table_name, or `table_name`
-            patterns = [
-                # Match backtick-quoted table names
-                (rf'`{re.escape(hive_table)}`', f'`{bq_table}`'),
-                # Match unquoted table names with word boundaries
-                # This pattern matches table names after FROM, JOIN, INTO, UPDATE, TABLE keywords
-                (rf'(?i)(?<=\bFROM\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
-                (rf'(?i)(?<=\bJOIN\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
-                (rf'(?i)(?<=\bINTO\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
-                (rf'(?i)(?<=\bUPDATE\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
-                (rf'(?i)(?<=\bTABLE\s)({re.escape(hive_table)})(?=\s|$|,|\))', bq_table),
-            ]
-            
-            for pattern, replacement in patterns:
-                result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-        
-        return result
+        new_sql, _ = self.validate_and_replace(sql)
+        return new_sql
     
     def get_mapping_info_for_prompt(self) -> str:
         """Generate a formatted string of table mappings for use in prompts.

@@ -257,11 +257,11 @@ if __name__ == "__main__":
         sys.exit(0)
     
     signal.signal(signal.SIGINT, handle_sigint)
-    
+    port = int(os.getenv("PORT", "8000"))
     uvicorn.run(
         "src.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=port,
         reload=True,
         timeout_graceful_shutdown=5,  # Force shutdown after 5 seconds
     )

@@ -1,0 +1,223 @@
+set hivevar:date_app=${zdt.addDay(-1).format("yyyyMMdd")}_test;
+
+-- 1) 规范化 + 生成两种 method 列（不再 union all）
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_base_${date_app};
+create table tmp_htl_dsjobdb.tmp_ibu_overall_base_${date_app} as
+select  t1.d,
+        t1.query_id,
+        t1.cid,
+        t1.is_has_click,
+        t1.is_has_order,
+        t1.rank_in_qid_new,
+        t1.is_meta,
+        t1.m_country,
+        t1.masterhotelid,
+        case when t1.channeltype is null or t1.channeltype='' then 'unk' else t1.channeltype end as channeltype,
+        case when t1.refername  is null or t1.refername ='' then 'unk' else t1.refername  end as refername,
+        case when t1.allianceid is null or t1.allianceid='' then 'unk' else t1.allianceid end as allianceid,
+        case when t1.alliancesiteid is null or t1.alliancesiteid='' then 'unk' else t1.alliancesiteid end as alliancesiteid,
+        -- 细分 method
+        case when t1.htlist_recomm_type='reclist_onlyone' then '唯一推荐'
+             when t1.htlist_recomm_type='reclist_searchcompensate' then '搜索补偿'
+             when t1.mainlist_is_only = 'T' and t1.htllist_type = 'mainlist' then '唯一结果主列表'
+             when t1.sort='2' then '价格（由低到高）'
+             when t1.sort='3' then '价格（由高到低）'
+             when t1.sort='4' then '好评优先'
+             when t1.sort='5' then '星级（由高到低）'
+             when t1.sort='6' then '距离（由近及远）'
+             else
+                   case when t1.dispatchid_type in ('103','104') then '主排/欢迎度排序'  
+                        when t1.dispatchid_type in ('112','114') then '智能排序：POI' 
+                        when t1.dispatchid_type in ('113','115') then '智能排序：我的位置' 
+                        when t1.dispatchid_type in ('143','144') then '智能排序：同城' 
+                        else '其他'
+                   end
+            end as method_detail,
+        -- 粗分 method（国内/海外主场景等）
+        case when t1.dispatchid_type in ('103','112','113','143') then '国内主场景排序'
+             when t1.dispatchid_type in ('104','114','115','144') then '海外主场景排序'
+             else null end as method_group,
+        dim.locale_group
+from    dw_htlbizdb.cdm_traf_ht_trip_list_qid_day t1
+        -- BROADCAST(dim)
+        inner join di_dsjobdb.adm_trip_locale_group_mapping_dim dim
+          on lower(replace(t1.locale, '_', '-')) = dim.locale
+where   t1.d >= '${zdt.addDay(-1).format("yyyy-MM-")}01'
+  and   t1.d <  add_months('${zdt.addDay(-1).format("yyyy-MM-")}01', 1)
+  and   t1.is_meta = 'F'
+;
+
+-- 2) 先按 query 粒度预聚合（大幅减少后续 distinct 成本）
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_qid_agg_${date_app};
+create table tmp_htl_dsjobdb.tmp_ibu_overall_qid_agg_${date_app} as
+select  d,
+        query_id,
+        cid,
+        channeltype, refername, allianceid, alliancesiteid,
+        method_detail, method_group,
+        locale_group,
+        -- 是否有点击/下单的最小 rank（若无则为 null）
+        min(case when (is_has_click=1 or is_has_order=1) then rank_in_qid_new end) as min_rank_clkord,
+        min(case when is_has_order=1 then rank_in_qid_new end)                    as min_rank_order,
+        -- 该 query 的曝光酒店数
+        count(distinct masterhotelid) as expo_hotel_cnt_q
+from    tmp_htl_dsjobdb.tmp_ibu_overall_base_${date_app}
+group by d, query_id, cid, channeltype, refername, allianceid, alliancesiteid, method_detail, method_group, locale_group
+;
+
+-- 3) 在 query 粒度上做指标聚合
+-- 3.1 用 method_detail
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_agg_detail_${date_app};
+create table tmp_htl_dsjobdb.tmp_ibu_overall_agg_detail_${date_app} as
+select  d,
+        nvl(channeltype,'all') as channeltype,
+        nvl(refername,'all')   as refername,
+        nvl(allianceid,'all')  as allianceid,
+        nvl(alliancesiteid,'all') as alliancesiteid,
+        nvl(method_detail,'all') as methodname,
+        nvl(locale_group,'all') as locale_group,
+        -- 预聚合后每行=一个 query
+        -- count(*)                                     as pv,
+        -- twy修改此行
+        count(distinct query_id) as pv,
+        
+        -- 如可接受近似，用 ndv/approx_count_distinct
+        count(distinct cid)                          as uv,
+        -- 点击/下单相关
+        sum(case when min_rank_clkord is not null then 1 else 0 end)                          as click_query_cnt,
+        sum(case when min_rank_clkord = 1 then 1 else 0 end)                                   as click_query_cnt_top1,
+        sum(case when min_rank_clkord <= 3 then 1 else 0 end)                                  as click_query_cnt_top3,
+        sum(case when min_rank_clkord <= 5 then 1 else 0 end)                                  as click_query_cnt_top5,
+        sum(case when min_rank_clkord <= 10 then 1 else 0 end)                                 as click_query_cnt_top10,
+        sum(case when min_rank_clkord <= 20 then 1 else 0 end)                                 as click_query_cnt_top20,
+        -- 下单相关
+        sum(case when min_rank_order is not null then 1 else 0 end)                            as order_query_cnt,
+        sum(case when min_rank_order = 1 then 1 else 0 end)                                    as order_query_cnt_top1,
+        sum(case when min_rank_order <= 3 then 1 else 0 end)                                   as order_query_cnt_top3,
+        sum(case when min_rank_order <= 5 then 1 else 0 end)                                   as order_query_cnt_top5,
+        sum(case when min_rank_order <= 10 then 1 else 0 end)                                  as order_query_cnt_top10,
+        sum(case when min_rank_order <= 20 then 1 else 0 end)                                  as order_query_cnt_top20,
+        -- 曝光酒店数：按 query 的去重酒店数求和
+        sum(expo_hotel_cnt_q)                            as expo_hotel_count
+from    tmp_htl_dsjobdb.tmp_ibu_overall_qid_agg_${date_app}
+where   method_detail is not null
+group by d, channeltype, refername, allianceid, alliancesiteid, method_detail, locale_group
+grouping sets(
+  d,
+  (d, channeltype),
+  (d, channeltype, method_detail),
+  (d, channeltype, method_detail, locale_group),
+  (d, channeltype, method_detail, allianceid),
+  (d, channeltype, refername),
+  (d, channeltype, refername, locale_group),
+  (d, channeltype, refername, method_detail),
+  (d, channeltype, refername, method_detail, allianceid),
+  (d, channeltype, refername, allianceid),
+  (d, channeltype, refername, allianceid, alliancesiteid),
+  (d, channeltype, refername, allianceid, alliancesiteid, method_detail, locale_group)
+);
+
+-- 3.2 用 method_group
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_agg_group_${date_app};
+create table tmp_htl_dsjobdb.tmp_ibu_overall_agg_group_${date_app} as
+select  d,
+        nvl(channeltype,'all') as channeltype,
+        nvl(refername,'all')   as refername,
+        nvl(allianceid,'all')  as allianceid,
+        nvl(alliancesiteid,'all') as alliancesiteid,
+        nvl(method_group,'all')  as methodname,
+        nvl(locale_group,'all') as locale_group,
+        -- count(*)                                     as pv,
+        -- twy修改此行
+        count(distinct query_id) as pv,
+        count(distinct cid)                          as uv,
+        sum(case when min_rank_clkord is not null then 1 else 0 end)                          as click_query_cnt,
+        sum(case when min_rank_clkord = 1 then 1 else 0 end)                                   as click_query_cnt_top1,
+        sum(case when min_rank_clkord <= 3 then 1 else 0 end)                                  as click_query_cnt_top3,
+        sum(case when min_rank_clkord <= 5 then 1 else 0 end)                                  as click_query_cnt_top5,
+        sum(case when min_rank_clkord <= 10 then 1 else 0 end)                                 as click_query_cnt_top10,
+        sum(case when min_rank_clkord <= 20 then 1 else 0 end)                                 as click_query_cnt_top20,
+        sum(case when min_rank_order is not null then 1 else 0 end)                            as order_query_cnt,
+        sum(case when min_rank_order = 1 then 1 else 0 end)                                    as order_query_cnt_top1,
+        sum(case when min_rank_order <= 3 then 1 else 0 end)                                   as order_query_cnt_top3,
+        sum(case when min_rank_order <= 5 then 1 else 0 end)                                   as order_query_cnt_top5,
+        sum(case when min_rank_order <= 10 then 1 else 0 end)                                  as order_query_cnt_top10,
+        sum(case when min_rank_order <= 20 then 1 else 0 end)                                  as order_query_cnt_top20,
+        sum(expo_hotel_cnt_q)                            as expo_hotel_count
+from    tmp_htl_dsjobdb.tmp_ibu_overall_qid_agg_${date_app}
+where   method_group is not null
+group by d, channeltype, refername, allianceid, alliancesiteid, method_group, locale_group
+grouping sets(
+  d,
+  (d, channeltype),
+  (d, channeltype, method_group),
+  (d, channeltype, method_group, locale_group),
+  (d, channeltype, method_group, allianceid),
+  (d, channeltype, refername),
+  (d, channeltype, refername, locale_group),
+  (d, channeltype, refername, method_group),
+  (d, channeltype, refername, method_group, allianceid),
+  (d, channeltype, refername, allianceid),
+  (d, channeltype, refername, allianceid, alliancesiteid),
+  (d, channeltype, refername, allianceid, alliancesiteid, method_group, locale_group)
+);
+
+-- 4) 合并结果并写入正式表（指标率继续在入库时计算）
+insert overwrite table di_dsjobdb.adm_ibu_overall_trend_analysis partition(d=d)
+select channeltype,refername,allianceid,alliancesiteid,methodname as scene,'all' as locale,locale_group,
+       pv,uv,
+       round(click_query_cnt/ pv, 6)      as click_query_rate,
+       round(click_query_cnt_top1/ nullif(click_query_cnt,0), 6)  as top1_click_rate,
+       round(click_query_cnt_top3/ nullif(click_query_cnt,0), 6)  as top3_click_rate,
+       round(click_query_cnt_top5/ nullif(click_query_cnt,0), 6)  as top5_click_rate,
+       round(click_query_cnt_top10/ nullif(click_query_cnt,0), 6) as top10_click_rate,
+       round(order_query_cnt_top1/ nullif(order_query_cnt,0), 6)  as top1_order_rate,
+       round(order_query_cnt_top3/ nullif(order_query_cnt,0), 6)  as top3_order_rate,
+       round(order_query_cnt_top5/ nullif(order_query_cnt,0), 6)  as top5_order_rate,
+       round(order_query_cnt_top10/ nullif(order_query_cnt,0), 6) as top10_order_rate,
+       round(order_query_cnt/ pv, 6)       as order_query_rate,
+       'all' as countryname,
+       expo_hotel_count,
+       round(click_query_cnt_top20/ nullif(click_query_cnt,0), 6) as top20_click_rate,
+       round(order_query_cnt_top20/ nullif(order_query_cnt,0), 6) as top20_order_rate,
+       -- twy增加查询口径
+       round(click_query_cnt_top1/ pv, 6)  as top1_click_rate_query,
+       round(click_query_cnt_top3/ pv, 6)  as top3_click_rate_query,
+       round(click_query_cnt_top5/ pv, 6)  as top5_click_rate_query,
+       round(click_query_cnt_top10/ pv, 6) as top10_click_rate_query,
+       round(order_query_cnt_top1/ pv, 6)  as top1_order_rate_query,
+       round(order_query_cnt_top3/ pv, 6)  as top3_order_rate_query,
+       round(order_query_cnt_top5/ pv, 6)  as top5_order_rate_query,
+       round(order_query_cnt_top10/ pv, 6) as top10_order_rate_query,
+       d
+from (
+  select 
+    d, channeltype, refername, allianceid, alliancesiteid,
+    case when methodname = 'all' then 'all_list' else methodname end as methodname, -- 整个列表页
+    locale_group,
+    pv, uv, click_query_cnt, click_query_cnt_top1, click_query_cnt_top3, 
+    click_query_cnt_top5, click_query_cnt_top10, click_query_cnt_top20,
+    order_query_cnt, order_query_cnt_top1, order_query_cnt_top3, 
+    order_query_cnt_top5, order_query_cnt_top10, order_query_cnt_top20,
+    expo_hotel_count
+  from tmp_htl_dsjobdb.tmp_ibu_overall_agg_detail_${date_app}
+  union all
+  select 
+    d, channeltype, refername, allianceid, alliancesiteid,
+    case when methodname = 'all' then 'all_model_list' else methodname end as methodname, -- 只考虑模型作用的主场景列表页
+    locale_group,
+    pv, uv, click_query_cnt, click_query_cnt_top1, click_query_cnt_top3, 
+    click_query_cnt_top5, click_query_cnt_top10, click_query_cnt_top20,
+    order_query_cnt, order_query_cnt_top1, order_query_cnt_top3, 
+    order_query_cnt_top5, order_query_cnt_top10, order_query_cnt_top20,
+    expo_hotel_count
+  from tmp_htl_dsjobdb.tmp_ibu_overall_agg_group_${date_app}
+) u
+;
+
+-- 5) 清理
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_agg_detail_${date_app};
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_agg_group_${date_app};
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_qid_agg_${date_app};
+drop table if exists tmp_htl_dsjobdb.tmp_ibu_overall_base_${date_app};
+

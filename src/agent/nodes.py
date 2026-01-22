@@ -90,12 +90,48 @@ def validate_hive_node(state: AgentState) -> dict[str, Any]:
         }
 
 
-def _convert_single_chunk(hive_sql: str, table_mapping_info: str) -> str:
+def table_mapping_node(state: AgentState) -> dict[str, Any]:
+    """Replace Hive table names with BigQuery table names in the input SQL.
+    
+    Args:
+        state: Current agent state containing hive_sql.
+        
+    Returns:
+        Updated state with mapped hive_sql or mapping_error.
+    """
+    logger.info("=" * 60)
+    logger.info("[Node: table_mapping] Starting table name mapping")
+    
+    hive_sql = state["hive_sql"]
+    table_mapping_service = get_table_mapping_service()
+    
+    # Validate and replace table names
+    mapped_sql, unmapped_tables = table_mapping_service.validate_and_replace(hive_sql)
+    
+    if unmapped_tables:
+        error_msg = f"Mapping failed: No BigQuery mapping found for tables: {', '.join(unmapped_tables)}"
+        logger.error(f"[Node: table_mapping] ✗ {error_msg}")
+        return {
+            "hive_sql": mapped_sql,
+            "mapping_error": error_msg
+        }
+    
+    if mapped_sql != hive_sql:
+        logger.info("[Node: table_mapping] ✓ Table names mapped")
+    else:
+        logger.info("[Node: table_mapping] No table names needed mapping")
+        
+    return {
+        "hive_sql": mapped_sql,
+        "mapping_error": None
+    }
+
+
+def _convert_single_chunk(hive_sql: str) -> str:
     """Convert a single SQL chunk using LLM.
     
     Args:
         hive_sql: The Hive SQL chunk to convert.
-        table_mapping_info: Table mapping information for the prompt.
         
     Returns:
         The converted BigQuery SQL.
@@ -104,7 +140,6 @@ def _convert_single_chunk(hive_sql: str, table_mapping_info: str) -> str:
     
     prompt = HIVE_TO_BIGQUERY_PROMPT.format(
         hive_sql=hive_sql,
-        table_mapping_info=table_mapping_info,
     )
     response = llm.invoke(prompt)
     
@@ -142,12 +177,6 @@ def convert_node(state: AgentState) -> dict[str, Any]:
     
     logger.info(f"[Node: convert] Input SQL: {sql_length} chars, {sql_lines} lines")
     
-    # Get table mapping information
-    table_mapping_service = get_table_mapping_service()
-    table_mapping_info = table_mapping_service.get_mapping_info_for_prompt()
-    
-    logger.info(f"[Node: convert] Using {len(table_mapping_service.get_all_mappings())} table mappings")
-    
     # Check if chunking is needed
     chunker = SQLChunker(hive_sql)
     use_chunking = chunker.should_chunk()
@@ -172,7 +201,7 @@ def convert_node(state: AgentState) -> dict[str, Any]:
             
             # Create converter with the single-chunk converter function
             def converter_func(sql: str) -> str:
-                return _convert_single_chunk(sql, table_mapping_info)
+                return _convert_single_chunk(sql)
             
             chunked_converter = ChunkedConverter(converter_func)
             bigquery_sql = chunked_converter.convert_chunks(chunks)
@@ -181,15 +210,11 @@ def convert_node(state: AgentState) -> dict[str, Any]:
         else:
             # Only one chunk, convert normally
             logger.info("[Node: convert] SQL analyzed but no chunking needed")
-            bigquery_sql = _convert_single_chunk(hive_sql, table_mapping_info)
+            bigquery_sql = _convert_single_chunk(hive_sql)
     else:
         # Direct conversion without chunking
         logger.info("[Node: convert] Using direct conversion (no chunking)")
-        bigquery_sql = _convert_single_chunk(hive_sql, table_mapping_info)
-    
-    # Apply table name replacement as a safety net
-    # (in case the LLM didn't apply all mappings correctly)
-    bigquery_sql = table_mapping_service.replace_table_names(bigquery_sql)
+        bigquery_sql = _convert_single_chunk(hive_sql)
     
     logger.info(f"[Node: convert] ✓ Conversion completed ({len(bigquery_sql)} chars)")
     
@@ -271,7 +296,6 @@ def fix_node(state: AgentState) -> dict[str, Any]:
     
     # Get table mapping information
     table_mapping_service = get_table_mapping_service()
-    table_mapping_info = table_mapping_service.get_mapping_info_for_prompt()
     
     # Format conversion history for the prompt
     history_str = ""
